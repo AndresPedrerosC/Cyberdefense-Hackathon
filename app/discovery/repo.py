@@ -147,6 +147,9 @@ def _parse_v2_packages(
     """Parse lockfile v2/v3 packages map."""
     items = []
     seen_ids = set()
+    parents = _v2_parents(packages)
+    # A package is dev-only when every installed copy of it is flagged dev.
+    prod = {_extract_package_name(k) for k, i in packages.items() if k and not i.get("dev")}
 
     for key, info in packages.items():
         if key == "":
@@ -181,9 +184,27 @@ def _parse_v2_packages(
             status="confirmed",
             source_url=f"file://{lockfile_path}",
             evidence=json.dumps({"key": key, "version": version}),
+            parents=sorted(parents.get(name, ())),
+            dev=name not in prod,
         ))
 
     return items
+
+
+def _v2_parents(packages: dict) -> dict[str, set[str]]:
+    """child package name -> names of packages that depend on it ("" for the root project)."""
+    parents: dict[str, set[str]] = {}
+    for key, info in packages.items():
+        owner = _extract_package_name(key) if key else ""
+        if key and not owner:
+            continue
+        deps = {**(info.get("dependencies") or {}), **(info.get("optionalDependencies") or {}),
+                **(info.get("peerDependencies") or {})}
+        if not key:
+            deps.update(info.get("devDependencies") or {})
+        for child in deps:
+            parents.setdefault(child, set()).add(owner)
+    return parents
 
 
 def _parse_v1_dependencies(
@@ -192,6 +213,18 @@ def _parse_v1_dependencies(
     """Parse lockfile v1 dependencies recursively."""
     items = []
     seen_ids = set()
+    parents: dict[str, set[str]] = {name: {""} for name in direct_deps}
+    prod: set[str] = set()
+
+    def edges(deps: dict):
+        for name, info in deps.items():
+            if not info.get("dev"):
+                prod.add(name)
+            for child in info.get("requires") or {}:
+                parents.setdefault(child, set()).add(name)
+            edges(info.get("dependencies") or {})
+
+    edges(dependencies)
 
     def walk(deps: dict, path: str = ""):
         for name, info in deps.items():
@@ -218,6 +251,8 @@ def _parse_v1_dependencies(
                     status="confirmed",
                     source_url=f"file://{lockfile_path}",
                     evidence=json.dumps({"name": name, "version": version}),
+                    parents=sorted(parents.get(name, ())),
+                    dev=name not in prod,
                 ))
 
             # Recurse into nested dependencies

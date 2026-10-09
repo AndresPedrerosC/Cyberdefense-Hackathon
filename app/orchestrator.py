@@ -7,7 +7,7 @@ from datetime import datetime
 
 from app import events as ev
 from app import store
-from app.config import POLL_INTERVAL_SECONDS, is_target_authorized, load_demo_config
+from app.config import POLL_INTERVAL_SECONDS, is_target_authorized
 from app.schema import Advisory, Emit, Run, RunState, RunTrigger, StackItem, Target
 
 _runs: dict[str, Run] = {}
@@ -69,12 +69,12 @@ def _new_run(target: Target, trigger: RunTrigger) -> Run:
 
 
 async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] | None = None) -> str:
-    """Execute one full pipeline run for a pre-allocated Run. Returns run_id."""
-    from app.discovery import discover
+    """Execute one full pipeline run for a pre-allocated Run. Returns run_id.
 
-    # Not `from app.intel import match`: once app.intel.match is imported, that name is the module.
-    from app.intel.match import match_stack_items as match
-    from app.verify import verify
+    discover -> skills (dependencies first, then code paths, live endpoints, exposures, recon)
+    -> exposure graph -> correlate -> findings.
+    """
+    from app.discovery import discover
 
     run_id = run.run_id
     emit = _emit(target.target_id, run_id)
@@ -88,6 +88,7 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         if prev:
             raw = await asyncio.to_thread(store.get_stack_items_for_run, prev["run_id"])
             stack_items = _rehydrate_inventory(raw, target.target_id, run_id)
+            _restore_lock_edges(stack_items, target)
             emit("discovery", "info",
                  f"Reusing inventory from {prev['run_id']} ({len(stack_items)} items)", None)
         else:
@@ -102,73 +103,21 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         run.inventory_hash = _inventory_hash(stack_items)
         store.insert_stack_items(stack_items)
 
-        _update_run_state(run, "matching")
-        candidates, advisories = await asyncio.to_thread(match, stack_items, run_id, emit)
-
-        cfg = load_demo_config()
-        released = set(cfg.get("released_advisories", []) or [])
-        held = set(cfg.get("demo_holdback_advisories", []) or []) - released
-        if held:
-            candidates = [c for c in candidates if c.advisory_id not in held]
-            advisories = [a for a in advisories if a.advisory_id not in held]
-
-        if scoped:
-            candidates = [c for c in candidates if c.advisory_id in scoped]
-            advisories = [a for a in advisories if a.advisory_id in scoped]
-
-        for a in advisories:
-            if a.advisory_id in released:
-                a.replayed = True
-
-        store.insert_advisories(advisories)
-        emit("intel", "info",
-             f"Matched {len(candidates)} candidates from {len(advisories)} advisories", None)
-        _record_intel(run_id, stack_items, candidates, advisories, emit)
-        posture = [] if scoped else _record_posture(run_id, emit)
-
-        _update_run_state(run, "verifying")
         authorized, reason = is_target_authorized(target.target_id, target.kind)
         run.verification_authorized = authorized
         run.authorization_reason = reason
 
-        si_map = {s.id: s for s in stack_items}
-        adv_map = {a.advisory_id: a for a in advisories}
-
-        verifications = await asyncio.to_thread(
-            verify, candidates, si_map, adv_map, target, run_id, emit
-        )
-        store.insert_verifications(verifications)
-
-        ver_map = {v.candidate_id: v for v in verifications}
-        for c in candidates:
-            v = ver_map.get(c.id)
-            si = si_map.get(c.stack_item_id)
-            c.risk_score = _risk_score(
-                c.severity_hint,
-                v.status if v else "inconclusive",
-                c.match_type,
-                si.status if si else "inferred",
-            )
-        if posture:
-            p_items, p_advs, p_cands, p_vers = _posture_rows(posture, target, run_id)
-            store.insert_stack_items(p_items)
-            store.insert_advisories(p_advs)
-            store.insert_verifications(p_vers)
-            candidates += p_cands
-        # Persisted after scoring so the report's ORDER BY risk_score reflects verification.
-        store.insert_candidates(candidates)
-
-        _update_run_state(run, "reporting")
-        await asyncio.to_thread(
-            _run_deep_scans, target, run_id, stack_items, candidates, emit
+        findings = await asyncio.to_thread(
+            _run_skills_and_correlate, run, target, stack_items, scoped, emit
         )
         _detect_changes(target.target_id, run_id, emit)
 
         _update_run_state(run, "complete")
         await asyncio.to_thread(_finish_knowledge, run_id, "complete", emit)
+        exposed = sum(1 for f in findings if f.reach == "exposed")
         emit("report", "info",
-             f"Run {run_id} complete: {len(candidates)} candidates, "
-             f"{len(verifications)} verifications", None)
+             f"Run {run_id} complete: {len(findings)} findings, {exposed} reachable from a "
+             "route", None)
 
     except Exception as e:
         failed_stage = run.state
@@ -178,6 +127,74 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         raise
 
     return run_id
+
+
+def _restore_lock_edges(stack_items: list[StackItem], target: Target) -> None:
+    """Rehydrated inventory loses lockfile parents and dev flags (not persisted); re-read them
+    so a scoped advisory run can still trace a transitive package to the code that uses it."""
+    if not target.repo:
+        return
+    from app.discovery.repo import discover_repo
+
+    try:
+        fresh = {s.package: s for s in discover_repo(target, "", lambda *_: None)}
+    except Exception:
+        return
+    for s in stack_items:
+        f = fresh.get(s.package)
+        if f:
+            s.parents, s.dev = f.parents, f.dev
+
+
+def _run_skills_and_correlate(run: Run, target: Target, stack_items: list[StackItem],
+                              scoped: set[str] | None, emit: Emit) -> list:
+    """Run every applicable skill, join their output in the exposure graph, and correlate."""
+    from app import config, scanner
+    from app.agent.llm import get_client, is_available
+    from app.correlate import build_graph, correlate
+    from app.recon.runner import get_live
+    from app.skills import SkillContext, registry, run_skill
+
+    repo_path = None
+    if target.repo and config.is_repo_path_allowed(target.repo):
+        resolved = config.resolve_repo_path(target.repo)
+        repo_path = resolved if resolved.is_dir() else None
+
+    ctx = SkillContext(target=target, run_id=run.run_id, emit=emit, stack_items=stack_items,
+                       repo_path=repo_path, kb=get_live(run.run_id), scoped_advisory_ids=scoped,
+                       set_state=lambda s: _update_run_state(run, s))
+    results = []
+    for skill in registry():
+        if skill.name == "dependencies":
+            # The advisory pipeline is the run's state machine; its failure fails the run.
+            results.append(skill.run(ctx))
+            _update_run_state(run, "reporting")
+        else:
+            results.append(run_skill(skill, ctx))
+
+    graph = build_graph(results)
+    client = model = None
+    if config.LLM_ENABLED:
+        ok, detail = is_available()
+        if ok:
+            client, model = get_client(), config.LLM_MODEL
+        else:
+            emit("report", "info", f"Model unavailable ({detail}); findings use the evidence "
+                 "template", None)
+    findings = correlate(graph, ctx, client, model)
+
+    by_name = {r.name: r for r in results}
+    scanner.store_scan_results(run.run_id, "findings", [f.model_dump(mode="json")
+                                                        for f in findings])
+    scanner.store_scan_results(run.run_id, "graph", graph.to_dict())
+    scanner.store_scan_results(run.run_id, "skills", [r.summary() for r in results])
+    scanner.store_scan_results(run.run_id, "vulnscan", by_name["exposures"].data or [])
+    scanner.store_scan_results(run.run_id, "endpoints", by_name["live_endpoints"].data or [])
+    scanner.store_scan_results(run.run_id, "routes",
+                               (by_name["code_graph"].data or {}).get("routes", []))
+    _run_deep_scans(target, run.run_id, stack_items, ctx.shared.get("candidates") or [], emit)
+    _enrich_intel(run.run_id, findings, emit)
+    return findings
 
 
 def _record_intel(run_id: str, stack_items: list[StackItem], candidates, advisories,
@@ -203,6 +220,25 @@ def _record_intel(run_id: str, stack_items: list[StackItem], candidates, advisor
         ))
     if not npm:
         emit("intel", "info", "OSV: no versioned JavaScript libraries on the site to check", None)
+    save(kb, emit)
+
+
+def _enrich_intel(run_id: str, findings, emit: Emit) -> None:
+    """Fold correlated reachability into the KB's OSV hits: a dependency that no route reaches
+    is only a possible match, and the finding's narrative becomes the hit's detail."""
+    from app.recon.runner import get_live, save
+
+    kb = get_live(run_id)
+    if not kb:
+        return
+    for f in findings:
+        if f.kind != "vulnerable-dependency" or not f.advisory_ids:
+            continue
+        for h in kb.intel:
+            if h.source == "osv" and h.id == f.advisory_ids[0] and h.tech in (f.package, None):
+                h.detail = f"{f.attacker_gets} {f.how_reachable}".strip() or h.detail
+                if f.reach == "installed":
+                    h.match = "possible"
     save(kb, emit)
 
 
@@ -282,38 +318,13 @@ def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:
 
 
 def _run_deep_scans(target, run_id, stack_items, candidates, emit) -> None:
-    """Run the deep-scan pillar. Each scanner is isolated: a failure in one emits a warning
-    and never fails the run or blocks the others."""
-    from app import config
+    """Surface attack-chain threats from the skills' scanner output. Isolated: a failure warns
+    and never fails the run."""
     from app import scanner
-    from app.scanner import endpoint_enumerator, threat_patterns, vulnerability_scanner
+    from app.scanner import threat_patterns
 
-    vuln_findings: list[dict] = []
-    endpoints: list[dict] = []
-
-    try:
-        vuln_findings = vulnerability_scanner.scan_dependencies(stack_items, run_id, emit)
-    except Exception as e:
-        emit("verification", "warn", f"Dependency scan failed: {e}", None)
-
-    if target.kind in ("connected_repo", "owned_deployment") and target.repo:
-        try:
-            if config.is_repo_path_allowed(target.repo):
-                repo_path = config.resolve_repo_path(target.repo)
-                vuln_findings += vulnerability_scanner.scan_secrets_exposure(repo_path, emit)
-                vuln_findings += vulnerability_scanner.scan_misconfigurations(repo_path, emit)
-            else:
-                emit("verification", "warn", "Repo outside allowed roots; skipping repo scan", None)
-        except Exception as e:
-            emit("verification", "warn", f"Repo scan failed: {e}", None)
-
-    if target.kind in ("public", "owned_deployment"):
-        try:
-            endpoints = endpoint_enumerator.enumerate_endpoints(target, run_id, emit)
-            endpoints = endpoint_enumerator.fingerprint_endpoints(endpoints, target, emit)
-        except Exception as e:
-            emit("discovery", "warn", f"Endpoint enumeration failed: {e}", None)
-
+    vuln_findings = scanner.get_scan_results(run_id, "vulnscan") or []
+    endpoints = scanner.get_scan_results(run_id, "endpoints") or []
     threats: list[dict] = []
     try:
         threats = threat_patterns.surface_threats(
@@ -321,9 +332,6 @@ def _run_deep_scans(target, run_id, stack_items, candidates, emit) -> None:
         )
     except Exception as e:
         emit("report", "warn", f"Threat surfacing failed: {e}", None)
-
-    scanner.store_scan_results(run_id, "vulnscan", vuln_findings)
-    scanner.store_scan_results(run_id, "endpoints", endpoints)
     scanner.store_scan_results(run_id, "threats", threats)
 
 

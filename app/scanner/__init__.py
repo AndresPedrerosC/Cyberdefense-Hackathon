@@ -10,7 +10,7 @@ from threading import Lock
 _RESULTS: dict[str, dict] = {}
 _LOCK = Lock()
 
-_SECTIONS = ("vulnscan", "endpoints", "threats")
+_SECTIONS = ("vulnscan", "endpoints", "threats", "findings", "graph", "skills", "routes")
 
 
 def store_scan_results(run_id: str, section: str, data: list | dict) -> None:
