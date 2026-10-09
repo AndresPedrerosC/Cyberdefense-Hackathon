@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "results": [
+    {
+      "check_id": "rules.ghsa-test-1111",
+      "path": "src/routes/search.js",
+      "start": {"line": 42, "col": 5},
+      "end": {"line": 42, "col": 40},
+      "extra": {
+        "message": "Vulnerable usage of lodash.template",
+        "severity": "WARNING",
+        "metadata": {"advisory_id": "GHSA-test-1111"}
+      }
+    },
+    {
+      "check_id": "rules.no-advisory-meta",
+      "path": "src/other.js",
+      "start": {"line": 7, "col": 1},
+      "end": {"line": 7, "col": 10},
+      "extra": {"message": "no metadata", "metadata": {}}
+    }
+  ],
+  "errors": []
+}

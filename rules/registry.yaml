@@ -1,0 +1,6 @@
+# Maps advisory IDs to Semgrep rule files
+# Rules are added after running discovery/intel on the demo app
+advisories:
+  GHSA-8g4m-cjm2-96wq: ghsa-8g4m-cjm2-96wq.yaml
+  GHSA-qwph-4952-7xr6: ghsa-qwph-4952-7xr6.yaml
+  GHSA-6g6m-m6h5-w9gf: ghsa-6g6m-m6h5-w9gf.yaml

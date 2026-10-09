@@ -1,0 +1,35 @@
+rules:
+  - id: ghsa-qwph-4952-7xr6-jsonwebtoken-verify-no-algorithms
+    message: >-
+      jsonwebtoken.verify() is called without an explicit `algorithms` allow-list.
+      GHSA-qwph-4952-7xr6 (CVE-2022-23540): in jsonwebtoken < 9.0.0 the default algorithm
+      handling lets an attacker pick the verification algorithm (including "none" or an
+      HS256/RS256 key-confusion downgrade), bypassing signature validation and forging tokens.
+      Upgrade to >= 9.0.0 and always pass { algorithms: ['RS256'] } (or the single algorithm you sign with).
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      advisory_id: GHSA-qwph-4952-7xr6
+      advisory_url: https://osv.dev/vulnerability/GHSA-qwph-4952-7xr6
+      cve: CVE-2022-23540
+      cwe: CWE-347
+      package: jsonwebtoken
+      affected: "<9.0.0"
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              import $JWT from 'jsonwebtoken'
+              ...
+          - pattern-inside: |
+              import * as $JWT from 'jsonwebtoken'
+              ...
+          - pattern-inside: |
+              $JWT = require('jsonwebtoken')
+              ...
+      - pattern-either:
+          - pattern: $JWT.verify($TOKEN, $KEY)
+          - pattern: $JWT.verify($TOKEN, $KEY, function $F(...) {...})
+          - pattern: $JWT.verify($TOKEN, $KEY, (...) => {...})
+          - patterns:
+              - pattern: $JWT.verify($TOKEN, $KEY, {...}, ...)
+              - pattern-not: '$JWT.verify($TOKEN, $KEY, {..., algorithms: $ALGS, ...}, ...)'

@@ -1,0 +1,7 @@
+juice_shop_commit: ""  # filled by setup_demo.sh
+authorized_targets:
+  t_juiceshop:
+    kinds: [connected_repo, owned_deployment]
+    repo: demo/juice-shop
+    allowed_hosts: ["localhost:3004", "127.0.0.1:3004"]
+demo_holdback_advisories: []  # filled after first run

@@ -1,0 +1,22 @@
+rules:
+  - id: ghsa-8g4m-cjm2-96wq-notevil-sandbox-escape
+    message: >-
+      notevil's eval (all versions <= 1.3.3) is used to evaluate data. GHSA-8g4m-cjm2-96wq
+      (CVE-2021-23771): the notevil "safe" evaluator can be escaped via prototype pollution
+      of Function/constructor, giving attacker-controlled input arbitrary code execution in the
+      host process. There is no fixed version; remove notevil and parse input with JSON.parse
+      or a strict schema validator instead.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      advisory_id: GHSA-8g4m-cjm2-96wq
+      advisory_url: https://osv.dev/vulnerability/GHSA-8g4m-cjm2-96wq
+      cve: CVE-2021-23771
+      cwe: CWE-1321
+      package: notevil
+      affected: "<=1.3.3"
+    pattern-either:
+      - pattern: import { eval as $E } from 'notevil'
+      - pattern: import { eval } from 'notevil'
+      - pattern: import $E from 'notevil'
+      - pattern: require('notevil')

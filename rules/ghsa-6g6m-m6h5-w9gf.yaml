@@ -1,0 +1,32 @@
+rules:
+  - id: ghsa-6g6m-m6h5-w9gf-express-jwt-missing-algorithms
+    message: >-
+      express-jwt middleware is configured without an `algorithms` option.
+      GHSA-6g6m-m6h5-w9gf (CVE-2020-15084): in express-jwt < 6.0.0, omitting `algorithms`
+      lets an attacker choose the token algorithm, enabling authorization bypass with forged
+      tokens (e.g. alg "none" or asymmetric-to-HMAC key confusion against a public key).
+      Upgrade to >= 6.0.0 and set algorithms: ['RS256'] explicitly.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      advisory_id: GHSA-6g6m-m6h5-w9gf
+      advisory_url: https://osv.dev/vulnerability/GHSA-6g6m-m6h5-w9gf
+      cve: CVE-2020-15084
+      cwe: CWE-863
+      package: express-jwt
+      affected: "<6.0.0"
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              import $EJ from 'express-jwt'
+              ...
+          - pattern-inside: |
+              $EJ = require('express-jwt')
+              ...
+      - pattern-either:
+          - pattern: '$EJ({..., secret: $S, ...})'
+          - pattern: '$EJ(({..., secret: $S, ...}) as $T)'
+          - pattern: '$EJ({..., secret: $S, ...} as $T)'
+      - pattern-not: '$EJ({..., algorithms: $A, ...})'
+      - pattern-not: '$EJ(({..., algorithms: $A, ...}) as $T)'
+      - pattern-not: '$EJ({..., algorithms: $A, ...} as $T)'

@@ -1,0 +1,13 @@
+rules:
+  - id: vulnerability-template
+    message: Vulnerable pattern detected
+    severity: WARNING
+    languages:
+      - javascript
+      - typescript
+    metadata:
+      advisory_id: PLACEHOLDER
+      advisory_url: https://osv.dev/vulnerability/PLACEHOLDER
+      cwe: CWE-XXX
+    pattern: |
+      # Add pattern here

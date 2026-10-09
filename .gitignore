@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+data/raw/
+data/cache/
+demo/juice-shop/
+.pytest_cache/
+.ruff_cache/
