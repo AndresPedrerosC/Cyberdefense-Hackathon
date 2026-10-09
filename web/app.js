@@ -1,215 +1,546 @@
 'use strict';
 
-const API = '';
+// Page state. One scan at a time; the report is fetched once when the run completes.
+let kind = 'repo';
 let targetId = null;
 let runId = null;
-let feedTimer = null;
-let statsTimer = null;
+let runActive = false;
+let runStartedAt = null;
+let lastRun = null;
+let report = null;
+let filter = 'all';
+let selected = null;
 let lastEventTs = null;
+let eventCount = 0;
+let feedTimer = null;
+let elapsedTimer = null;
 
 const $ = id => document.getElementById(id);
 
-// Radio toggle
-document.querySelectorAll('input[name=target-type]').forEach(r => {
-  r.addEventListener('change', e => {
-    $('repo-input').style.display = e.target.value === 'repo' ? '' : 'none';
-    $('domain-input').style.display = e.target.value === 'public' ? '' : 'none';
+const STAGES = [
+  { key: 'discovering', label: 'Discover', desc: 'List every installed package and version from the lockfile.' },
+  { key: 'matching', label: 'Match', desc: 'Compare installed versions with advisory affected ranges.' },
+  { key: 'verifying', label: 'Verify', desc: 'Run Semgrep rules to check if the vulnerable code is called.' },
+  { key: 'reporting', label: 'Report', desc: 'Rank by severity and verification strength.' },
+];
+
+const SEVERITIES = ['critical', 'high', 'medium', 'low', 'unknown'];
+
+// Verification outcomes in plain language. Raw enum values stay in the evidence chain.
+const VSTATUS = {
+  verified: { label: 'Reachable', cls: 'o-exposed' },
+  present: { label: 'Installed', cls: 'o-found' },
+  not_present: { label: 'Not present', cls: 'o-clear' },
+  inconclusive: { label: 'Inconclusive', cls: 'o-gray' },
+};
+
+const FILTERS = [
+  { key: 'all', label: 'All', test: () => true },
+  { key: 'reachable', label: 'Reachable', title: 'A Semgrep rule found the vulnerable call in the code', test: f => f.verification_status === 'verified' },
+  { key: 'direct', label: 'Direct deps', test: f => f.direct },
+];
+
+const TARGET_TITLE = {
+  repo: 'Local path to a repository with a package-lock.json',
+  public: 'A domain you own or are authorized to test. Public scans infer technologies and skip code checks.',
+};
+
+// ---- Target type + scan ----
+
+document.querySelectorAll('#scan-form .seg button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    kind = btn.dataset.kind;
+    document.querySelectorAll('#scan-form .seg button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+    const input = $('target-input');
+    input.placeholder = kind === 'repo' ? 'demo/juice-shop' : 'example.com';
+    input.value = kind === 'repo' ? 'demo/juice-shop' : '';
+    input.title = TARGET_TITLE[kind];
+    input.focus();
   });
 });
 
-// Start scan
-$('start-btn').addEventListener('click', async () => {
-  const type = document.querySelector('input[name=target-type]:checked').value;
-  const val = type === 'repo' ? $('repo-path').value.trim() : $('domain').value.trim();
-  if (!val) return;
+$('scan-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const val = $('target-input').value.trim();
+  if (!val || runActive) return;
 
-  $('start-btn').disabled = true;
-  lastEventTs = null;
-  $('findings-body').innerHTML = '';
-  $('changes-list').querySelector('ul').innerHTML = '';
-
+  resetRun();
+  setBusy(true);
+  $('crumb-target').textContent = val;
+  $('nav-target').textContent = val;
   try {
-    const tRes = await post('/api/targets', {
-      kind: type === 'repo' ? 'connected_repo' : 'public',
+    const t = await post('/api/targets', {
+      kind: kind === 'repo' ? 'connected_repo' : 'public',
       name: val,
-      repo: type === 'repo' ? val : null,
-      domain: type === 'public' ? val : null,
+      repo: kind === 'repo' ? val : null,
+      domain: kind === 'public' ? val : null,
     });
-    targetId = tRes.target_id;
+    targetId = t.target_id;
+    $('nav-target-id').textContent = targetId;
+    renderAuth(t.authorized);
 
-    const auth = $('auth-status');
-    auth.className = tRes.authorized ? 'ok' : 'no';
-    auth.textContent = tRes.authorized
-      ? `Authorized: ${tRes.authorization_reason}`
-      : `Not authorized: ${tRes.authorization_reason}`;
-
-    const rRes = await post('/api/runs', { target_id: targetId, trigger: 'manual' });
-    runId = rRes.run_id;
-
+    const r = await post('/api/runs', { target_id: targetId, trigger: 'manual' });
+    runId = r.run_id;
+    runActive = true;
+    runStartedAt = Date.now();
+    $('panel-run').textContent = runId;
+    renderPipeline({ state: 'queued' });
+    startElapsed();
     startFeed();
-    startStats();
-  } catch (e) {
-    alert('Failed to start: ' + e.message);
-  } finally {
-    $('start-btn').disabled = false;
+  } catch (err) {
+    showRunError('Could not start the scan (' + err.message + ').');
+    setBusy(false);
   }
 });
 
-function startFeed() {
-  if (feedTimer) clearInterval(feedTimer);
-  feedTimer = setInterval(pollFeed, 2000);
-  pollFeed();
+function resetRun() {
+  runId = null;
+  lastRun = null;
+  report = null;
+  filter = 'all';
+  lastEventTs = null;
+  eventCount = 0;
+  closeInspector();
+  $('term').innerHTML = '<div class="term-empty">$ scan starting</div>';
+  setCount('events', 0);
+  setCount('changes', 0);
+  $('changes').innerHTML = '<div class="term-empty">Changes are computed when the scan completes.</div>';
+  $('run-error').hidden = true;
+  setCount('findings', 0);
+  renderKpis();
+  renderFilter();
+  renderBoard('Findings appear when the scan completes.');
 }
 
-async function pollFeed() {
+function setBusy(busy) {
+  const btn = $('start-btn');
+  btn.disabled = busy;
+  btn.classList.toggle('busy', busy);
+  btn.querySelector('.btn-label').textContent = busy ? 'Scanning' : 'Run scan';
+}
+
+function setCount(which, n) {
+  const map = { events: ['nav-events', 'tab-events'], changes: ['nav-changes', 'tab-changes'], findings: ['nav-findings'] };
+  map[which].forEach(id => { $(id).textContent = fmtNum(n); });
+}
+
+function renderAuth(authorized) {
+  $('nav-auth').innerHTML = authorized
+    ? '<span class="dot green"></span>Enabled'
+    : '<span class="dot amber"></span>Skipped, not authorized';
+  $('nav-auth').title = authorized
+    ? 'Target is on the authorized list, so Semgrep checks run against its code.'
+    : 'Target is not on the authorized list. Matching runs, code verification does not.';
+}
+
+function showRunError(msg) {
+  $('run-error').hidden = false;
+  $('run-error').textContent = msg;
+}
+
+function startElapsed() {
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  renderRunMeta();
+  elapsedTimer = setInterval(renderRunMeta, 1000);
+}
+
+function renderRunMeta() {
+  const meta = $('run-meta');
+  if (!runId) { meta.textContent = 'No scan yet'; return; }
+  let ms = Date.now() - runStartedAt;
+  if (lastRun && lastRun.started_ts && lastRun.finished_ts) ms = parseTs(lastRun.finished_ts) - parseTs(lastRun.started_ts);
+  const state = lastRun ? lastRun.state : 'queued';
+  const word = state === 'complete' ? 'completed in' : state === 'failed' ? 'failed after' : 'running';
+  meta.textContent = `${runId} · ${word} ${fmtDuration(ms)}`;
+}
+
+// ---- Pipeline ----
+
+function renderPipeline(run) {
+  const failedAt = run.state === 'failed' && run.error ? run.error.split(':')[0] : null;
+  const idx = STAGES.findIndex(s => s.key === (failedAt || run.state));
+  const counts = stageCounts();
+  const settled = run.state === 'complete' || run.state === 'failed';
+  $('pipeline').classList.toggle('compact', settled);
+  $('strip-sub').hidden = run.state !== 'idle';
+
+  $('pipeline').innerHTML = STAGES.map((s, i) => {
+    let st = 'pending';
+    if (run.state === 'complete' || (idx >= 0 && i < idx)) st = 'done';
+    else if (i === idx) st = run.state === 'failed' ? 'error' : 'active';
+    const mark = st === 'active' ? '<span class="spinner"></span>' : '<span class="dot"></span>';
+    const c = counts[s.key] || { text: st === 'active' ? 'working' : '' };
+    return `<li class="pstep ${st}">
+      <div class="pstep-top"><span class="pnum">0${i + 1}</span><span class="pmark">${mark}</span><span class="plabel">${s.label}</span><span class="pcount${c.hot ? ' hot' : ''}">${esc(c.text)}</span></div>
+      <div class="pdesc">${s.desc}</div>
+    </li>`;
+  }).join('');
+}
+
+// Per-stage results, available once the report is loaded.
+function stageCounts() {
+  if (!report) return {};
+  const f = report.findings || [];
+  const s = report.summary || {};
+  const advisories = new Set(f.map(x => x.advisory_id)).size;
+  const reachable = f.filter(x => x.verification_status === 'verified').length;
+  const verifyText = s.verification_authorized === false
+    ? 'Skipped, target not authorized'
+    : `${reachable} reachable in code`;
+  return {
+    discovering: { text: `${fmtNum(s.components)} components` },
+    matching: { text: `${fmtNum(f.length)} matches, ${fmtNum(advisories)} advisories` },
+    verifying: { text: verifyText, hot: reachable > 0 },
+    reporting: { text: `${fmtNum(f.length)} findings ranked` },
+  };
+}
+
+// ---- Verdict ----
+
+function renderKpis() {
+  const f = report ? report.findings || [] : null;
+  const s = report ? report.summary || {} : {};
+  const v = n => (f ? fmtNum(n) : '--');
+  const reachable = f ? f.filter(x => x.verification_status === 'verified').length : 0;
+  const critical = f ? f.filter(x => x.severity === 'critical').length : 0;
+  const directHits = f ? f.filter(x => x.direct).length : 0;
+  const cells = [
+    { k: 'Components scanned', v: v(s.components), cls: '', d: f ? `${fmtNum(s.direct_components)} direct, the rest transitive` : 'packages in the lockfile' },
+    { k: 'Vulnerable versions', v: v(f && f.length), cls: '', d: f ? `${fmtNum(directHits)} in direct dependencies` : 'installed version inside an advisory range' },
+    { k: 'Reachable in code', v: v(reachable), cls: f ? (reachable ? 'red' : 'green') : 'muted', d: 'vulnerable call found by Semgrep' },
+    { k: 'Critical severity', v: v(critical), cls: f && critical ? 'red' : f ? '' : 'muted', d: 'severity from the advisory' },
+  ];
+  $('kpis').innerHTML = cells.map(c =>
+    `<div class="kpi" title="${esc(c.d)}"><span class="k">${c.k}</span><span class="v ${c.cls}">${c.v}</span></div>`
+  ).join('');
+}
+
+// ---- Findings board ----
+
+function renderFilter() {
+  const f = report ? report.findings || [] : [];
+  $('filter').innerHTML = FILTERS.map(x =>
+    `<button type="button" data-filter="${x.key}" aria-pressed="${x.key === filter}"${x.title ? ` title="${x.title}"` : ''}>${x.label}<span class="count">${fmtNum(f.filter(x.test).length)}</span></button>`
+  ).join('');
+  $('filter').querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    filter = b.dataset.filter;
+    renderFilter();
+    renderBoard();
+  }));
+}
+
+// Within a column: reachable first, then risk, then package name.
+function cardOrder(a, b) {
+  const r = (b.verification_status === 'verified') - (a.verification_status === 'verified');
+  return r || (b.risk_score || 0) - (a.risk_score || 0) || String(a.package).localeCompare(String(b.package));
+}
+
+function renderBoard(emptyMsg) {
+  const all = report ? report.findings || [] : [];
+  const list = all.filter(FILTERS.find(x => x.key === filter).test);
+  const bySev = Object.fromEntries(SEVERITIES.map(s => [s, []]));
+  list.forEach(f => (bySev[SEVERITIES.includes(f.severity) ? f.severity : 'unknown']).push(f));
+  const cols = SEVERITIES.filter(s => s !== 'unknown' || bySev.unknown.length);
+
+  $('board').innerHTML = cols.map(sev => {
+    const items = bySev[sev].sort(cardOrder);
+    const reach = items.filter(f => f.verification_status === 'verified').length;
+    const body = items.length
+      ? items.map(cardHtml).join('')
+      : `<div class="col-empty">${esc(emptyMsg || (report ? 'None' : 'No scan yet'))}</div>`;
+    return `<div class="col sev-${sev}">
+      <div class="col-h"><span class="col-name">${cap(sev)}</span><span class="col-count">${reach ? `<b>${reach} reachable</b> · ` : ''}${items.length}</span></div>
+      <div class="col-body">${body}</div>
+    </div>`;
+  }).join('');
+
+  $('board').querySelectorAll('.card').forEach(card => {
+    card.addEventListener('click', () => openInspector(card.dataset.id));
+  });
+}
+
+function cardHtml(f) {
+  const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
+  const isSel = selected === f.candidate_id;
+  const reach = f.verification_status === 'verified';
+  return `<button type="button" class="card${reach ? ' reachable' : ''}" data-id="${esc(f.candidate_id)}" aria-pressed="${isSel}" title="${esc(f.advisory_id)}">
+    <span class="card-top"><span class="card-pkg">${esc(f.package || '?')}@${esc(f.version || '?')}</span>${reach ? `<span class="tag tag-sm ${vs.cls}">${vs.label}</span>` : ''}</span>
+    <span class="card-sum">${esc(f.summary || f.advisory_id)}</span>
+  </button>`;
+}
+
+// ---- Inspector ----
+
+function openInspector(id) {
+  const f = (report && report.findings || []).find(x => x.candidate_id === id);
+  if (!f) return;
+  selected = id;
+  $('board').querySelectorAll('.card').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.id === id)));
+  const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
+  const sev = f.severity || 'unknown';
+  $('insp-body').innerHTML = `
+    <div class="insp-pkg">${esc(f.package)}@${esc(f.version || '?')}</div>
+    ${f.summary ? `<div class="insp-sum">${esc(f.summary)}</div>` : ''}
+    <div class="insp-tags">
+      <span class="tag sev-${esc(sev)}">${cap(sev)}</span>
+      <span class="tag ${vs.cls}">${vs.label}</span>
+      <span class="mono">risk ${f.risk_score ?? '--'} · ${f.direct ? 'direct' : 'transitive'}</span>
+    </div>
+    ${sourcesList(f)}
+    ${reasoning(f)}`;
+  $('inspector').hidden = false;
+}
+
+function closeInspector() {
+  selected = null;
+  $('inspector').hidden = true;
+  document.querySelectorAll('.card[aria-pressed="true"]').forEach(c => c.setAttribute('aria-pressed', 'false'));
+}
+
+$('insp-close').addEventListener('click', closeInspector);
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('inspector').hidden) closeInspector(); });
+
+// Every input the verdict rests on, in the order it was used. Paths are local, links are external.
+function sourcesFor(f) {
+  const out = [];
+  if (f.source_url) out.push({ node: 'repo', type: 'Lockfile', value: shortPath(f.source_url) });
+  if (f.advisory_url) out.push({ node: 'advisory', type: 'Advisory, OSV', value: f.advisory_id, href: f.advisory_url });
+  (f.checks_performed || []).filter(c => c.startsWith('semgrep:')).forEach(c => {
+    out.push({ node: 'verify', type: 'Semgrep rule', value: 'rules/' + c.slice('semgrep:'.length) });
+  });
+  (f.evidence || []).filter(e => (e.kind === 'semgrep' || e.kind === 'runtime') && e.source_url).forEach(e => {
+    out.push({ node: 'verify', type: e.kind === 'semgrep' ? 'Code match' : 'Runtime check', value: shortPath(e.source_url) });
+  });
+  return out;
+}
+
+function sourcesList(f) {
+  const rows = sourcesFor(f);
+  if (!rows.length) return '';
+  return `<div class="sources">
+    <div class="sec-label">Sources <span class="mono">${rows.length}</span></div>
+    <ol class="src-list">${rows.map(r => `
+      <li><span class="dot ${r.node}"></span><span class="src-type">${esc(r.type)}</span>
+        ${r.href
+          ? `<a class="src-val" href="${esc(r.href)}" target="_blank" rel="noopener" title="${esc(r.href)}">${esc(r.value)} <span aria-hidden="true">&#8599;</span></a>`
+          : `<span class="src-val" title="${esc(r.value)}">${esc(r.value)}</span>`}
+      </li>`).join('')}
+    </ol>
+  </div>`;
+}
+
+// What each source established, one short statement per step.
+function reasoning(f) {
+  const steps = [];
+  steps.push({ node: 'repo', title: 'Installed', body: `<div class="quote">"${esc(f.package)}": "${esc(f.version || '?')}"</div>` });
+  if (f.reason) {
+    steps.push({ node: 'advisory', title: 'Matched', body: `<div class="tsm">${esc(f.reason.replace(/\s*\(source:[^)]*\)\s*$/, ''))}</div>` });
+  }
+  const hit = (f.evidence || []).find(e => e.kind === 'semgrep');
+  let verify;
+  if (hit) {
+    const m = /matched (\S+?):(\d+): (.*)$/s.exec(hit.detail || '');
+    const firstSentence = m ? m[3].split(/(?<=\.)\s/)[0] : hit.detail;
+    verify = `${m ? `<div class="codeline">${esc(m[1].replace(/^demo\/[^/]+\//, ''))}:${esc(m[2])}</div>` : ''}<div class="tsm">${esc(firstSentence)}</div>`;
+  } else if (f.verification_status === 'present') {
+    verify = '<div class="tsm">Affected version confirmed in the lockfile. No code rule exists for this advisory, so reachability was not checked.</div>';
+  } else {
+    verify = (f.evidence || []).map(e => `<div class="tsm">${esc(e.detail)}</div>`).join('') || '<div class="tsm">No checks recorded.</div>';
+  }
+  const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
+  steps.push({ node: 'verify', title: vs.label, body: verify });
+  const fix = f.suggested_fix || (f.fixed_version ? `Upgrade ${f.package} to ${f.fixed_version} or later` : null);
+  if (fix) steps.push({ node: 'fixn', title: 'Fix', body: `<div class="fix">${esc(fix)}</div>` });
+
+  return `<div class="sec-label">Reasoning</div><div class="chain">${steps.map((st, i) => `
+    <div class="cstep"><div class="crail"><div class="cnode ${st.node}"></div>${i < steps.length - 1 ? '<div class="cline"></div>' : ''}</div>
+      <div class="cbody"><h4>${esc(st.title)}</h4>${st.body}</div></div>`).join('')}</div>`;
+}
+
+// file:///abs/.../demo/juice-shop/x#L5 -> demo/juice-shop/x:5
+function shortPath(url) {
+  let p = String(url).replace(/^file:\/\//, '');
+  let line = '';
+  const h = p.indexOf('#L');
+  if (h >= 0) { line = ':' + p.slice(h + 2); p = p.slice(0, h); }
+  const i = p.indexOf('/demo/');
+  if (i >= 0) p = p.slice(i + 1);
+  else if (p.startsWith('/')) p = p.split('/').slice(-3).join('/');
+  return p + line;
+}
+
+// ---- Polling ----
+
+function startFeed() {
+  if (feedTimer) clearInterval(feedTimer);
+  feedTimer = setInterval(poll, 2000);
+  poll();
+}
+
+async function poll() {
   if (!targetId) return;
   try {
     const url = '/api/events?target_id=' + targetId + (lastEventTs ? '&since=' + encodeURIComponent(lastEventTs) : '');
     const evts = await get(url);
-    if (evts.length) {
-      lastEventTs = evts[0].ts;
-      const feed = $('feed');
-      const frag = document.createDocumentFragment();
-      evts.reverse().forEach(e => {
-        const row = document.createElement('div');
-        row.className = 'feed-row ' + e.level;
-        row.innerHTML = `<span class="t">${fmtTime(e.ts)}</span><span class="feed-tag">${esc(e.stage)}</span><span>${esc(e.message)}</span>`;
-        frag.appendChild(row);
-      });
-      feed.insertBefore(frag, feed.firstChild);
-    }
+    if (evts.length) appendEvents(evts);
 
-    if (runId) {
+    if (runId && runActive) {
       const run = await get('/api/runs/' + runId);
-      if (run.state === 'complete' || run.state === 'failed') {
-        loadFindings();
-        loadChanges();
-      }
+      lastRun = run;
+      if (run.state === 'complete' || run.state === 'failed') await finishRun(run);
+      renderPipeline(run);
+      renderRunMeta();
     }
-  } catch (_) {}
+  } catch (_) { /* transient; the next tick retries */ }
 }
 
-function startStats() {
-  if (statsTimer) clearInterval(statsTimer);
-  statsTimer = setInterval(pollStats, 5000);
+// Terminal order: oldest at the top. Follow the tail only if the user is already at the bottom.
+function appendEvents(evts) {
+  lastEventTs = evts[0].ts;
+  const term = $('term');
+  const atBottom = term.scrollHeight - term.scrollTop - term.clientHeight < 24;
+  if (!eventCount) term.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  evts.slice().reverse().forEach(e => {
+    const row = document.createElement('div');
+    row.className = `tline ${esc(e.level)}`;
+    row.innerHTML = `<span class="t">${fmtTime(e.ts)}</span><span class="lv">${esc(String(e.level).toUpperCase())}</span><span class="sg ${esc(e.stage)}">${esc(e.stage)}</span><span class="m">${esc(e.message)}</span>`;
+    frag.appendChild(row);
+  });
+  term.appendChild(frag);
+  eventCount += evts.length;
+  setCount('events', eventCount);
+  if (atBottom || eventCount === evts.length) term.scrollTop = term.scrollHeight;
+}
+
+async function finishRun(run) {
+  runActive = false;
+  if (elapsedTimer) clearInterval(elapsedTimer);
+  setBusy(false);
+  if (run.state === 'failed') {
+    showRunError(run.error || 'The scan failed.');
+    renderBoard('Scan failed');
+    return;
+  }
+  try {
+    report = await get('/api/runs/' + runId + '/report');
+  } catch (err) {
+    showRunError('Scan finished but the report could not be loaded (' + err.message + ').');
+    return;
+  }
+  setCount('findings', (report.findings || []).length);
+  renderKpis();
+  renderFilter();
+  renderBoard();
+  loadChanges();
   pollStats();
+
+  // Put the strongest finding in front: the top reachable card opens in the inspector.
+  const top = (report.findings || []).filter(f => f.verification_status === 'verified').sort(cardOrder)[0];
+  if (top && window.innerWidth > 1280) openInspector(top.candidate_id);
+}
+
+async function loadChanges() {
+  try {
+    const data = await get('/api/targets/' + targetId + '/changes');
+    const changes = data.changes || [];
+    setCount('changes', changes.length);
+    $('changes').innerHTML = changes.length
+      ? changes.map(c => `<div class="chg">${esc(c.description)}</div>`).join('')
+      : `<div class="term-empty">${data.previous_run_id ? 'Nothing new since the previous scan.' : 'First scan of this target. Run again later to see what changed.'}</div>`;
+  } catch (_) { /* optional panel */ }
 }
 
 async function pollStats() {
   try {
-    const s = await get('/api/stats');
-    $('corpus-count').textContent = (s.advisories_total || 0).toLocaleString() + ' advisories';
+    const [s, h] = await Promise.all([get('/api/stats'), get('/api/health')]);
+    $('corpus-count').textContent = fmtNum(s.advisories_total || 0);
     $('query-latency').textContent = Math.round(s.last_query_latency_ms || 0) + ' ms';
-    $('record-count').textContent = (s.total_records || 0).toLocaleString();
-
-    if (s.demo_mode) {
-      $('demo-btn').style.display = '';
-    }
-  } catch (_) {}
-}
-
-async function loadFindings() {
-  if (!runId) return;
-  try {
-    const report = await get('/api/runs/' + runId + '/report');
-    let findings = report.findings || [];
-
-    if ($('filter-direct').checked) findings = findings.filter(f => f.direct);
-    if ($('filter-confirmed').checked) findings = findings.filter(f => f.match_type === 'confirmed');
-
-    $('findings-body').innerHTML = findings.map((f, i) => `
-      <tr data-idx="${i}">
-        <td>${i + 1}</td>
-        <td>
-          ${esc(f.package || '?')}@${esc(f.version || '?')}
-          ${f.status === 'inferred' ? '<span class="badge guess">Guess, unverified</span>' : ''}
-          ${f.replayed ? '<span class="badge replay">Replayed for demo</span>' : ''}
-        </td>
-        <td><a href="${esc(f.advisory_url || '#')}" target="_blank">${esc(f.advisory_id)}</a></td>
-        <td><span class="sev ${f.severity}">${f.severity}</span></td>
-        <td>${f.match_type}${!f.version ? ' <span class="badge noversion">Version unknown</span>' : ''}</td>
-        <td><span class="vstatus ${f.verification_status}">${f.verification_status}</span></td>
-        <td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(f.suggested_fix || '--')}</td>
-      </tr>
-    `).join('');
-
-    // Store findings for modal
-    window._findings = findings;
-    document.querySelectorAll('#findings-body tr').forEach(row => {
-      row.addEventListener('click', () => showEvidence(window._findings[+row.dataset.idx]));
-    });
-  } catch (e) {
-    console.error('loadFindings', e);
+    $('record-count').textContent = fmtNum(s.total_records || 0);
+    $('sys-mode').textContent = s.demo_mode ? 'demo' : 'live';
+    $('sys-ch').innerHTML = h.clickhouse ? '<span class="dot green"></span>Connected' : '<span class="dot red"></span>Down';
+    $('demo-btn').hidden = !s.demo_mode;
+  } catch (_) {
+    $('sys-ch').innerHTML = '<span class="dot red"></span>API unreachable';
   }
 }
 
-async function loadChanges() {
-  if (!targetId) return;
+// ---- Nav, panel tabs, collapse, resize ----
+
+function showTab(tab) {
+  document.querySelectorAll('.panel-tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
+  $('term').hidden = tab !== 'activity';
+  $('changes').hidden = tab !== 'changes';
+}
+
+document.querySelectorAll('.panel-tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => {
+  document.querySelectorAll('.nav-item').forEach(i => i.removeAttribute('aria-current'));
+  item.setAttribute('aria-current', 'page');
+  const view = item.dataset.view;
+  if (view === 'findings') { $('board').scrollIntoView({ block: 'nearest' }); return; }
+  $('shell').classList.remove('panel-collapsed');
+  showTab(view);
+}));
+
+$('panel-toggle').addEventListener('click', () => {
+  const collapsed = $('shell').classList.toggle('panel-collapsed');
+  $('panel-toggle').setAttribute('aria-label', collapsed ? 'Expand panel' : 'Collapse panel');
+});
+
+// Drag the top edge of the panel to resize it; the height is remembered per browser.
+(function initResize() {
+  const shell = $('shell');
+  const handle = $('panel-resize');
   try {
-    const data = await get('/api/targets/' + targetId + '/changes');
-    const ul = $('changes-list').querySelector('ul');
-    ul.innerHTML = (data.changes || []).map(c =>
-      `<li>${esc(c.description)}</li>`
-    ).join('') || '<li style="color:var(--muted)">No changes</li>';
-  } catch (_) {}
-}
+    const saved = localStorage.getItem('sw.panelH');
+    if (saved) shell.style.setProperty('--panel-h', saved + 'px');
+  } catch (_) { /* storage unavailable */ }
+  handle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    shell.classList.remove('panel-collapsed');
+    const move = ev => {
+      const h = Math.min(Math.max(window.innerHeight - ev.clientY, 120), window.innerHeight * 0.7);
+      shell.style.setProperty('--panel-h', Math.round(h) + 'px');
+    };
+    const up = () => {
+      handle.classList.remove('dragging');
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      try { localStorage.setItem('sw.panelH', parseInt(shell.style.getPropertyValue('--panel-h'), 10)); } catch (_) { /* ignore */ }
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  });
+})();
 
-// Filter listeners
-$('filter-direct').addEventListener('change', loadFindings);
-$('filter-confirmed').addEventListener('change', loadFindings);
+// ---- Demo replay ----
 
-// Evidence modal
-function showEvidence(f) {
-  $('evidence-content').innerHTML = `
-    <div class="ev-block">
-      <div class="kind">Stack Item</div>
-      <div>${esc(f.package)}@${esc(f.version || 'unknown')}</div>
-      ${f.source_url ? `<a href="${esc(f.source_url)}" target="_blank">View source</a>` : ''}
-    </div>
-    <div class="ev-block">
-      <div class="kind">Advisory ${esc(f.advisory_id)}</div>
-      <div>${esc(f.summary || '')}</div>
-      <a href="${esc(f.advisory_url || '#')}" target="_blank">View on OSV</a>
-    </div>
-    ${(f.evidence || []).map(e => `
-      <div class="ev-block">
-        <div class="kind">${esc(e.kind)}</div>
-        <div>${esc(e.detail)}</div>
-        ${e.source_url ? `<a href="${esc(e.source_url)}" target="_blank">View source</a>` : ''}
-      </div>
-    `).join('')}
-    <div class="ev-block">
-      <div class="kind">Suggested Fix</div>
-      <div>${esc(f.suggested_fix || 'See advisory')}</div>
-    </div>
-  `;
-  $('modal-overlay').classList.add('open');
-}
-
-$('modal-close').addEventListener('click', () => $('modal-overlay').classList.remove('open'));
-$('modal-overlay').addEventListener('click', e => { if (e.target === $('modal-overlay')) $('modal-overlay').classList.remove('open'); });
-
-// Demo replay
 $('demo-btn').addEventListener('click', async () => {
   const id = prompt('Advisory ID to replay:');
   if (!id) return;
   try {
-    await post('/api/advisories/replay', { advisory_id: id });
-    alert('Released. Next poll will pick it up.');
-  } catch (e) {
-    alert('Failed: ' + e.message);
+    await post('/api/advisories/replay', { advisory_id: id.trim() });
+    $('demo-btn').textContent = 'Released, next poll picks it up';
+  } catch (err) {
+    $('demo-btn').textContent = 'Replay failed (' + err.message + ')';
   }
+  setTimeout(() => { $('demo-btn').textContent = 'Replay advisory'; }, 3000);
 });
 
-// Helpers
+// ---- Helpers ----
+
 async function get(url) {
-  const r = await fetch(API + url);
+  const r = await fetch(url);
   if (!r.ok) throw new Error(r.status);
   return r.json();
 }
 
 async function post(url, body) {
-  const r = await fetch(API + url, {
+  const r = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -218,14 +549,38 @@ async function post(url, body) {
   return r.json();
 }
 
+// The API returns naive UTC timestamps; pin them to UTC before formatting locally.
+function parseTs(ts) {
+  const s = String(ts);
+  return new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z').getTime();
+}
+
 function fmtTime(ts) {
-  return new Date(ts).toLocaleTimeString('en-US', { hour12: false });
+  return new Date(parseTs(ts)).toLocaleTimeString('en-US', { hour12: false });
+}
+
+function fmtDuration(ms) {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  return sec < 60 ? sec + 's' : Math.floor(sec / 60) + 'm ' + (sec % 60) + 's';
+}
+
+function fmtNum(n) {
+  return n == null ? '--' : Number(n).toLocaleString();
+}
+
+function cap(s) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
 }
 
 function esc(s) {
   if (s == null) return '';
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-// Init
+// ---- Init ----
+renderPipeline({ state: 'idle' });
+renderKpis();
+renderFilter();
+renderBoard();
 pollStats();
+setInterval(pollStats, 15000);

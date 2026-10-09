@@ -69,7 +69,12 @@ def _get_target(target_id: str) -> Target | None:
 
 @app.post("/api/targets")
 async def create_target(req: CreateTargetRequest):
-    target_id = req.target_id or f"t_{uuid.uuid4().hex[:8]}"
+    # A repo path that matches a configured target binds to that target's pre-authorized id.
+    target_id = (
+        req.target_id
+        or config.find_authorized_target_id(req.kind, req.repo)
+        or f"t_{uuid.uuid4().hex[:8]}"
+    )
     target = Target(
         target_id=target_id,
         kind=req.kind,
@@ -122,8 +127,19 @@ async def get_report(run_id: str):
         parameters={"run_id": run_id},
     ).result_rows
 
+    comp = client.query(
+        "SELECT count(), countIf(d) FROM (SELECT id, any(direct) AS d FROM stack_items "
+        "WHERE run_id = {run_id:String} GROUP BY id)",
+        parameters={"run_id": run_id},
+    ).result_rows[0]
+    summary = {
+        "components": comp[0],
+        "direct_components": comp[1],
+        "verification_authorized": run.get("verification_authorized"),
+    }
+
     if not cand_rows:
-        return {"run_id": run_id, "state": run["state"], "findings": []}
+        return {"run_id": run_id, "state": run["state"], "summary": summary, "findings": []}
 
     si_ids = list({r[1] for r in cand_rows})
     adv_ids = list({r[2] for r in cand_rows})
@@ -172,7 +188,7 @@ async def get_report(run_id: str):
             "replayed": bool(adv[1]) if adv else False,
         })
 
-    return {"run_id": run_id, "state": run["state"], "findings": findings}
+    return {"run_id": run_id, "state": run["state"], "summary": summary, "findings": findings}
 
 
 @app.get("/api/targets/{target_id}/changes")

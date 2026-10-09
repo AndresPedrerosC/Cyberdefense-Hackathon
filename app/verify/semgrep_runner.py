@@ -1,6 +1,8 @@
 """Semgrep rule runner."""
 
 import json
+import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -11,6 +13,17 @@ from app.schema import Emit
 
 RULES_DIR = Path(__file__).resolve().parents[2] / "rules"
 REGISTRY_FILE = RULES_DIR / "registry.yaml"
+VENV_SEMGREP = RULES_DIR.parent / ".venv" / "bin" / "semgrep"
+
+
+def semgrep_bin() -> str:
+    """SEMGREP_BIN, then the project venv, then PATH."""
+    configured = os.environ.get("SEMGREP_BIN")
+    if configured:
+        return configured
+    if VENV_SEMGREP.exists():
+        return str(VENV_SEMGREP)
+    return shutil.which("semgrep") or "semgrep"
 
 
 def load_registry(emit: Emit) -> dict[str, str]:
@@ -57,7 +70,7 @@ def run_semgrep(
     try:
         # Run Semgrep once with all rules
         cmd = [
-            "semgrep", "scan",
+            semgrep_bin(), "scan",
             "--json",
             "--metrics=off",
             "--timeout", "30",

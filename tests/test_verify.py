@@ -298,7 +298,7 @@ def test_semgrep_parses_saved_json(rules_dir, emit):
     assert "rules.ghsa-test-1111" in out[ADV]["detail"]
     assert out[ADV]["source_url"] == "file://src/routes/search.js#L42"
     cmd = run.call_args.args[0]
-    assert cmd[:2] == ["semgrep", "scan"] and "--metrics=off" in cmd
+    assert Path(cmd[0]).name == "semgrep" and cmd[1] == "scan" and "--metrics=off" in cmd
     assert cmd[-1] == "/repo"
 
 

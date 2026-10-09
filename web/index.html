@@ -3,88 +3,131 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Continuous Exposure Agent</title>
+  <title>Stackwatch Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header>
-    <div class="brandline">
-      <div class="mark" aria-hidden="true"></div>
-      <h1>Continuous Exposure Agent</h1>
-    </div>
-    <div class="stats">
-      <span id="corpus-count">-- advisories</span>
-      <span id="query-latency">-- ms</span>
-    </div>
-  </header>
+  <!-- Console shell: nav | (toolbar / canvas / inspector) | terminal panel across the bottom -->
+  <div class="shell" id="shell">
 
-  <div class="layout">
-    <!-- Input -->
-    <div class="panel" id="input-panel">
-      <h2>Target</h2>
-      <div class="radio-row">
-        <label><input type="radio" name="target-type" value="repo" checked> Connected Repo</label>
-        <label><input type="radio" name="target-type" value="public"> Public Domain</label>
+    <!-- Left nav -->
+    <nav class="nav" aria-label="Primary">
+      <div class="nav-brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="wordmark">Stack<em>watch</em></span>
       </div>
-      <div id="repo-input">
-        <input type="text" id="repo-path" placeholder="demo/juice-shop">
-      </div>
-      <div id="domain-input" style="display:none">
-        <input type="text" id="domain" placeholder="example.com">
-        <p class="hint">Confirm this is the correct domain before scanning.</p>
-      </div>
-      <button id="start-btn">Start Scan</button>
-      <div id="auth-status"></div>
-    </div>
 
-    <!-- Feed -->
-    <div class="panel" id="feed-panel">
-      <h2>Live Activity</h2>
-      <div id="feed"></div>
-    </div>
-
-    <!-- Monitor -->
-    <div class="panel" id="monitor-panel">
-      <h2>Monitoring</h2>
-      <div class="mon-row"><span class="k">Records</span><span id="record-count">--</span></div>
-      <div id="changes-list">
-        <h3>Changes Since Last Scan</h3>
-        <ul></ul>
+      <div class="nav-group">
+        <div class="nav-label">Views</div>
+        <button class="nav-item" data-view="findings" aria-current="page">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2" width="3.5" height="12"/><rect x="6.25" y="2" width="3.5" height="8"/><rect x="11" y="2" width="3.5" height="10"/></svg>
+          Findings<span class="nav-count mono" id="nav-findings">0</span>
+        </button>
+        <button class="nav-item" data-view="activity">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3l4 4-4 4M8 12h6"/></svg>
+          Activity<span class="nav-count mono" id="nav-events">0</span>
+        </button>
+        <button class="nav-item" data-view="changes">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>
+          Changes<span class="nav-count mono" id="nav-changes">0</span>
+        </button>
       </div>
-      <button id="demo-btn">Replay Advisory</button>
-    </div>
 
-    <!-- Findings -->
-    <div class="panel" id="findings-panel">
-      <h2>Findings</h2>
-      <div class="filter-bar">
-        <label><input type="checkbox" id="filter-direct" checked> Direct only</label>
-        <label><input type="checkbox" id="filter-confirmed" checked> Confirmed only</label>
+      <div class="nav-group">
+        <div class="nav-label">Target</div>
+        <div class="nav-kv"><span>Name</span><span class="mono" id="nav-target">none</span></div>
+        <div class="nav-kv"><span>ID</span><span class="mono" id="nav-target-id">--</span></div>
+        <div class="nav-kv"><span>Verification</span><span id="nav-auth" class="dlabel"><span class="dot gray"></span>--</span></div>
       </div>
-      <div class="tbl-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>#</th><th>Package</th><th>Advisory</th><th>Severity</th>
-              <th>Match</th><th>Status</th><th>Fix</th>
-            </tr>
-          </thead>
-          <tbody id="findings-body"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
 
-  <!-- Modal -->
-  <div class="overlay" id="modal-overlay">
-    <div class="modal">
-      <span class="close" id="modal-close">&times;</span>
-      <h3>Evidence Chain</h3>
-      <div id="evidence-content"></div>
-    </div>
+      <div class="nav-group nav-foot">
+        <div class="nav-label">System</div>
+        <div class="nav-kv"><span>ClickHouse</span><span id="sys-ch" class="dlabel"><span class="dot gray"></span>--</span></div>
+        <div class="nav-kv"><span>Advisories</span><span class="mono" id="corpus-count">--</span></div>
+        <div class="nav-kv"><span>Query</span><span class="mono" id="query-latency">--</span></div>
+        <div class="nav-kv"><span>Records</span><span class="mono" id="record-count">--</span></div>
+        <div class="nav-kv"><span>Mode</span><span class="mono" id="sys-mode">--</span></div>
+      </div>
+    </nav>
+
+    <!-- Toolbar: scan controls -->
+    <header class="toolbar">
+      <div class="crumbs">
+        <span class="crumb-root">Exposure scan</span>
+        <span class="crumb-sep">/</span>
+        <span class="mono" id="crumb-target">new</span>
+      </div>
+      <form class="scanbar" id="scan-form" autocomplete="off">
+        <div class="seg seg-sm" role="group" aria-label="Target type">
+          <button type="button" data-kind="repo" aria-pressed="true">Repository</button>
+          <button type="button" data-kind="public" aria-pressed="false">Public domain</button>
+        </div>
+        <input class="input input-sm mono" id="target-input" value="demo/juice-shop" placeholder="demo/juice-shop" aria-label="Target"
+          title="Local path to a repository with a package-lock.json">
+        <button class="btn btn-primary btn-sm" id="start-btn" type="submit"><span class="spinner" aria-hidden="true"></span><span class="btn-label">Run scan</span></button>
+      </form>
+    </header>
+
+    <!-- Center canvas -->
+    <main class="canvas">
+      <section class="strip">
+        <div class="strip-h">
+          <div>
+            <h1>Pipeline</h1>
+            <p class="strip-sub" id="strip-sub">Lists installed packages, matches versions against published advisories, then runs Semgrep rules to check whether the vulnerable code is called.</p>
+          </div>
+          <span class="mono strip-meta" id="run-meta">No scan yet</span>
+        </div>
+        <ol class="pipeline" id="pipeline"></ol>
+        <div id="run-error" class="run-error" hidden></div>
+      </section>
+
+      <section class="kpis" id="kpis"></section>
+
+      <section class="board-wrap">
+        <div class="board-h">
+          <div class="board-title"><h2>Findings by severity</h2></div>
+          <div class="seg seg-sm" id="filter" role="group" aria-label="Filter findings"></div>
+        </div>
+        <div class="board" id="board"></div>
+      </section>
+    </main>
+
+    <!-- Inspector: evidence for the selected finding -->
+    <aside class="inspector" id="inspector" aria-label="Finding detail" hidden>
+      <div class="insp-h">
+        <span class="insp-title">Evidence</span>
+        <button class="icon-btn" id="insp-close" type="button" aria-label="Close detail">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button>
+      </div>
+      <div class="insp-body" id="insp-body"></div>
+    </aside>
+
+    <!-- Bottom panel: terminal-style log and changes -->
+    <section class="panel" id="panel">
+      <div class="panel-resize" id="panel-resize" role="separator" aria-orientation="horizontal" aria-label="Resize panel"></div>
+      <div class="panel-h">
+        <div class="panel-tabs" role="tablist">
+          <button role="tab" data-tab="activity" aria-selected="true">Activity <span class="mono" id="tab-events">0</span></button>
+          <button role="tab" data-tab="changes" aria-selected="false">Changes <span class="mono" id="tab-changes">0</span></button>
+        </div>
+        <div class="panel-actions">
+          <span class="mono panel-run" id="panel-run"></span>
+          <button class="btn btn-ghost btn-xs" id="demo-btn" type="button" hidden>Replay advisory</button>
+          <button class="icon-btn" id="panel-toggle" type="button" aria-label="Collapse panel">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div class="term" id="term" role="log" aria-live="polite"><div class="term-empty">$ waiting for a scan. Events from discovery, intel, verification and monitoring stream here.</div></div>
+        <div class="changes" id="changes" hidden><div class="term-empty">No scan yet.</div></div>
+      </div>
+    </section>
   </div>
 
   <script src="/app.js"></script>

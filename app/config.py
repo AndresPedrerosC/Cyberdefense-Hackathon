@@ -49,6 +49,15 @@ def is_repo_authorized(target_id: str, repo: str | None) -> bool:
     actual = (actual if actual.is_absolute() else PROJECT_ROOT / actual).resolve()
     return actual == expected
 
+def find_authorized_target_id(kind: str, repo: str | None) -> str | None:
+    """Return the pre-authorized target id whose configured repo is exactly this path."""
+    if not repo:
+        return None
+    for target_id, entry in load_demo_config().get("authorized_targets", {}).items():
+        if entry.get("repo") and kind in entry.get("kinds", []) and is_repo_authorized(target_id, repo):
+            return target_id
+    return None
+
 def get_allowed_hosts(target_id: str) -> list[str]:
     cfg = load_demo_config()
     return cfg.get("authorized_targets", {}).get(target_id, {}).get("allowed_hosts", [])
