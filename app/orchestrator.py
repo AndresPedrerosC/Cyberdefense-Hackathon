@@ -13,7 +13,8 @@ from app.schema import Advisory, Emit, Run, RunState, RunTrigger, StackItem, Tar
 _runs: dict[str, Run] = {}
 _targets: dict[str, Target] = {}
 _active: dict[str, asyncio.Task] = {}
-_pending: dict[str, tuple[RunTrigger, list[str] | None]] = {}
+# A queued follow-up owns its Run up front so the caller can poll it by id.
+_pending: dict[str, tuple[Run, list[str] | None]] = {}
 _background: set[asyncio.Task] = set()
 
 
@@ -251,14 +252,20 @@ async def start_run(
 
     active = _active.get(tid)
     if active and not active.done():
-        prev_trigger, prev_ids = _pending.get(tid, (trigger, None))
+        if tid in _pending:
+            follow, prev_ids = _pending[tid]
+        else:
+            follow, prev_ids = _new_run(target, trigger), None
         merged = sorted(set(prev_ids or []) | set(scoped_advisory_ids or [])) or None
         # A full-rescan trigger dominates a scoped advisory trigger.
-        next_trigger = trigger if trigger != "advisory" else prev_trigger
-        _pending[tid] = (next_trigger, merged if next_trigger == "advisory" else None)
+        if trigger != "advisory" and follow.trigger != trigger:
+            follow.trigger = trigger
+            store.insert_run(follow)
+        _pending[tid] = (follow, merged if follow.trigger == "advisory" else None)
         _emit(tid)("system", "info",
-                   f"Run already active for {tid}, queued follow-up trigger={next_trigger}", None)
-        return {"run_id": None, "queued": True, "trigger": next_trigger}
+                   f"Run already active for {tid}, queued follow-up {follow.run_id} "
+                   f"trigger={follow.trigger}", None)
+        return {"run_id": follow.run_id, "queued": True, "trigger": follow.trigger}
 
     run = _new_run(target, trigger)
     _active[tid] = asyncio.create_task(_run_and_followup(run, target, scoped_advisory_ids))
@@ -274,8 +281,8 @@ async def _run_and_followup(run: Run, target: Target, scoped_advisory_ids: list[
     finally:
         _active.pop(tid, None)
         if tid in _pending:
-            next_trigger, next_ids = _pending.pop(tid)
-            next_run = _new_run(target, next_trigger)
+            next_run, next_ids = _pending.pop(tid)
+            next_run.started_ts = datetime.utcnow()
             _active[tid] = asyncio.create_task(_run_and_followup(next_run, target, next_ids))
 
 

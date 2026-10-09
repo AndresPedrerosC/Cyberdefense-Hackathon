@@ -158,7 +158,8 @@ function renderRunMeta() {
   let ms = Date.now() - runStartedAt;
   if (lastRun && lastRun.started_ts && lastRun.finished_ts) ms = parseTs(lastRun.finished_ts) - parseTs(lastRun.started_ts);
   const state = lastRun ? lastRun.state : 'queued';
-  const word = state === 'complete' ? 'completed in' : state === 'failed' ? 'failed after' : 'running';
+  const word = state === 'complete' ? 'completed in' : state === 'failed' ? 'failed after'
+    : state === 'queued' ? 'queued behind the active scan,' : 'running';
   meta.textContent = `${runId} · ${word} ${fmtDuration(ms)}`;
 }
 
