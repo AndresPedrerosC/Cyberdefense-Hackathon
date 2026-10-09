@@ -24,8 +24,11 @@ from app.config import (
     resolve_repo_path,
 )
 from app.events import make_emit
+from app.integrations import senso
 from app.recon.domain import normalize_domain
+from app.recon.kb import KnowledgeBase
 from app.recon.runner import get_live
+from app.recon.runner import save as save_kb
 from app.schema import RunTrigger, Target, TargetKind
 from app.verify.runtime import deploy_url_refusal
 
@@ -281,6 +284,68 @@ async def get_knowledge(run_id: RunIdPath):
     if not doc:
         raise HTTPException(404, "No knowledge base for this run")
     return Response(doc, media_type="application/json")
+
+
+class AskRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=senso.MAX_QUESTION_CHARS)
+
+    @field_validator("question")
+    @classmethod
+    def _not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("question must not be blank")
+        return v
+
+
+async def _load_kb(run_id: str) -> KnowledgeBase | None:
+    kb = get_live(run_id)
+    if kb:
+        return kb
+    doc = await asyncio.to_thread(store.get_knowledge, run_id)
+    return KnowledgeBase.model_validate_json(doc) if doc else None
+
+
+def _senso_status(kb: KnowledgeBase) -> dict:
+    s = kb.senso
+    if not senso.is_configured():
+        state = "not_configured"
+    elif s.get("state"):
+        state = s["state"]
+    else:
+        # Ingest runs as the run closes out; until then there is nothing to ask.
+        state = "pending" if kb.status == "complete" else "waiting"
+    return {"configured": senso.is_configured(), "state": state, "title": s.get("title"),
+            "error": s.get("error"), "ingested_ts": s.get("ingested_ts")}
+
+
+@app.get("/api/runs/{run_id}/senso")
+async def get_senso_status(run_id: RunIdPath):
+    """Whether this run's knowledge base is in Senso yet. Polls Senso while it is ingesting."""
+    kb = await _load_kb(run_id)
+    if not kb:
+        raise HTTPException(404, "No knowledge base for this run")
+    if await asyncio.to_thread(senso.refresh_state, kb):
+        await asyncio.to_thread(save_kb, kb)
+    return _senso_status(kb)
+
+
+@app.post("/api/runs/{run_id}/ask")
+async def ask_knowledge(run_id: RunIdPath, req: AskRequest):
+    """Answer a question from this run's knowledge base document in Senso."""
+    if not senso.is_configured():
+        raise HTTPException(503, "Senso is not configured")
+    kb = await _load_kb(run_id)
+    if not kb:
+        raise HTTPException(404, "No knowledge base for this run")
+    content_id = kb.senso.get("content_id")
+    if not content_id:
+        raise HTTPException(409, "This run's knowledge base has not been ingested into Senso")
+    try:
+        result = await asyncio.to_thread(senso.search, req.question, [content_id])
+    except senso.SensoError as e:
+        raise HTTPException(502, str(e)) from None
+    return {**result, "powered_by": "senso", "document": kb.senso.get("title")}
 
 
 @app.get("/api/runs/{run_id}/vulnscan")

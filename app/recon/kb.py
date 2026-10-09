@@ -129,6 +129,9 @@ class KnowledgeBase(BaseModel):
     intel: list[IntelHit] = Field(default_factory=list)
     agent: AgentState = Field(default_factory=AgentState)
     coverage: dict[str, CollectorStatus] = Field(default_factory=dict)
+    # Senso.ai ingest of this run: state (not_configured | ingesting | ready | failed),
+    # title, content_id, kb_node_id, ingested_ts, error. Empty until the run completes.
+    senso: dict[str, Any] = Field(default_factory=dict)
 
     def add_fact(self, category: FactCategory, key: str, value: Any, source: str,
                  confidence: Confidence = "medium", by: str = "recon") -> None:

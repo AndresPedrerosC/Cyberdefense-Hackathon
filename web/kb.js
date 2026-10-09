@@ -11,8 +11,16 @@ let kbTab = null;
 let kbTimer = null;
 let kbLoading = false;
 let kbSubsExpanded = false;
+// Ask box and Senso ingest status live outside the DOM: kbRender() rewrites innerHTML.
+let kbAsk = { q: '', busy: false, asked: '', answer: null, citations: [], error: '' };
+let kbSenso = null;
+let kbSensoRun = null;
+let kbSensoTimer = null;
+let kbSensoTries = 0;
 
 const KB_ACTIVE = ['building', 'enriching', 'cross-referencing'];
+const KB_SENSO_WAIT = ['waiting', 'pending', 'ingesting'];
+const KB_SENSO_MAX_TRIES = 60;
 const KB_SUBS_COLLAPSE = 60;
 const KB_INTEL_SOURCES = [
   { keys: ['kev', 'cisa-kev'], label: 'CISA known exploited list' },
@@ -37,6 +45,7 @@ const KB_COVERAGE_LABEL = {
   nvd: 'NVD CVE database',
   epss: 'EPSS exploit probability',
   posture: 'Configuration posture rules',
+  senso: 'Senso knowledge base',
 };
 const KB_SEC_HEADERS = {
   'strict-transport-security': ['HSTS', 'forces browsers to use HTTPS'],
@@ -56,6 +65,11 @@ function kbLink(url, text) {
   return /^(https?:|mailto:|tel:)/i.test(String(url || ''))
     ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(t)}</a>`
     : esc(t);
+}
+
+// Answers and citations come from Senso, so only plain http(s) URLs become links.
+function kbHttpLink(url, text) {
+  return /^https?:\/\//i.test(String(url || '')) ? kbLink(url, text) : esc(text == null ? url : text);
 }
 
 function kbList(v) { return Array.isArray(v) ? v : []; }
@@ -186,6 +200,96 @@ function kbObservations() {
   });
   out.sort((a, b) => KB_SEV_RANK[a.sev] - KB_SEV_RANK[b.sev]);
   return out;
+}
+
+// ---- Ask the knowledgebase (Senso) ----
+
+function kbAskHtml() {
+  const head = '<div class="kb-ask-h"><h2>Ask the knowledgebase</h2><span class="kb-ask-by">Powered by Senso</span></div>';
+  const s = kbSenso;
+  let note = '';
+  let ready = false;
+  if (kbActive()) note = kbEmpty('Available when the scan completes. The finished knowledgebase is sent to Senso so you can ask questions about it.');
+  else if (!s) note = kbPending('Checking Senso...');
+  else if (s.state === 'not_configured') note = kbEmpty('Senso is not configured. Set SENSO_API_KEY on the server and run a new scan to ask questions here.');
+  else if (s.state === 'failed') note = `<p class="kb-ask-err">Senso ingest failed${s.error ? ': ' + esc(s.error) : ''}.</p>`;
+  else if (KB_SENSO_WAIT.includes(s.state)) note = kbSensoTries >= KB_SENSO_MAX_TRIES
+    ? kbEmpty('Senso is still indexing this knowledgebase. Reopen the tab to check again.')
+    : kbPending(s.state === 'ingesting' ? 'Senso is indexing this knowledgebase...' : 'Sending this knowledgebase to Senso...');
+  else if (s.state === 'ready') ready = true;
+  else note = kbEmpty('Senso status unknown.');
+
+  const off = !ready || kbAsk.busy ? ' disabled' : '';
+  const form = `<form class="kb-ask-form" data-kb-ask><input class="input" name="q" type="text" maxlength="500" autocomplete="off" placeholder="${esc('Ask about ' + kb.domain + ', e.g. Is DMARC enforced?')}" aria-label="Question about this knowledgebase" value="${esc(kbAsk.q)}"${off}><button class="btn btn-sm btn-primary" type="submit"${off}>Ask</button></form>`;
+
+  let out = '';
+  if (kbAsk.busy) out = kbPending('Asking Senso...');
+  else if (kbAsk.error) out = `<p class="kb-ask-err">Senso could not answer: ${esc(kbAsk.error)}</p>`;
+  else if (kbAsk.answer != null) {
+    const cites = kbList(kbAsk.citations);
+    out = `<div class="kb-ask-q">${esc(kbAsk.asked)}</div><p class="kb-ask-a">${esc(kbAsk.answer || 'Senso found nothing in this knowledgebase that answers the question.')}</p>` +
+      (cites.length ? `<div class="kb-group-h">Citations (${cites.length})</div><ol class="kb-cites">${cites.map(c => `<li><div class="t">${esc(c.title)}${typeof c.score === 'number' ? `<span class="kb-src"> score ${esc(c.score.toFixed(2))}</span>` : ''}</div><div class="d">${esc(c.snippet)}</div>${kbList(c.urls).length ? `<div class="kb-src">${kbList(c.urls).map(u => kbHttpLink(u, u)).join(' ')}</div>` : ''}</li>`).join('')}</ol>` : '');
+  }
+  return `<section class="kb-ask">${head}${note}${form}${out ? `<div class="kb-ask-out" aria-live="polite">${out}</div>` : ''}</section>`;
+}
+
+function kbSensoStop() {
+  if (kbSensoTimer) clearTimeout(kbSensoTimer);
+  kbSensoTimer = null;
+}
+
+// Polls ingest status once the KB is complete, until Senso reports a final state.
+async function kbSensoLoad() {
+  kbSensoTimer = null;
+  const id = kbRunId;
+  if (!id || !kb || kbActive()) return;
+  try {
+    const s = await get('/api/runs/' + id + '/senso');
+    if (id !== kbRunId) return;
+    const changed = !kbSenso || kbSenso.state !== s.state;
+    kbSenso = s;
+    kbSensoTries += 1;
+    if (changed && kbTab === 'target') kbRender();
+  } catch (_) { kbSensoTries += 1; }
+  if (id === kbRunId && (!kbSenso || KB_SENSO_WAIT.includes(kbSenso.state)) && kbSensoTries < KB_SENSO_MAX_TRIES) {
+    kbSensoTimer = setTimeout(kbSensoLoad, 3000);
+  } else if (kbTab === 'target') kbRender();
+}
+
+function kbSensoEnsure() {
+  if (!kb || kbActive() || !kbRunId || kbSensoRun === kbRunId) return;
+  kbSensoRun = kbRunId;
+  kbSensoTries = 0;
+  kbSensoStop();
+  kbSensoLoad();
+}
+
+async function kbAskSubmit(q) {
+  const id = kbRunId;
+  q = String(q || '').trim();
+  if (!q || !id || kbAsk.busy) return;
+  kbAsk = { q, busy: true, asked: q, answer: null, citations: [], error: '' };
+  kbRender();
+  try {
+    const r = await fetch('/api/runs/' + id + '/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q }),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (id !== kbRunId) return;
+    if (!r.ok) {
+      const d = data && data.detail;
+      kbAsk.error = typeof d === 'string' ? d : `request failed (HTTP ${r.status})`;
+    } else {
+      kbAsk.answer = String(data.answer || '');
+      kbAsk.citations = kbList(data.citations);
+    }
+  } catch (_) {
+    if (id === kbRunId) kbAsk.error = 'the server could not be reached';
+  } finally {
+    if (id === kbRunId) { kbAsk.busy = false; kbRender(); }
+  }
 }
 
 // ---- Target tab ----
@@ -517,7 +621,8 @@ function kbCoverageSection(n) {
 
 function kbTargetHtml() {
   const secs = [kbOrgSection, kbWebSection, kbMailSection, kbDnsSection, kbHostingSection, kbStackSection, kbSubsSection, kbAgentSection];
-  return kbMasthead() +
+  kbSensoEnsure();
+  return kbAskHtml() + kbMasthead() +
     kbAgentCallout(kbObj(kb.agent).profile, 'The agent is researching this organization...', 'Profile') +
     kbGlance() +
     secs.map((f, i) => f(String(i + 1).padStart(2, '0'))).join('') +
@@ -635,8 +740,11 @@ function kbShellHtml() {
 function kbRender() {
   const root = $('kb');
   if (!root) return;
+  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest('[data-kb-ask]');
   try {
     root.innerHTML = kbShellHtml();
+    const input = typing && root.querySelector('[data-kb-ask] input');
+    if (input && !input.disabled) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
   } catch (err) {
     root.innerHTML = `<div class="kb-tabs"></div>${kbEmpty('The knowledgebase could not be displayed (' + (err && err.message) + ').')}`;
   }
@@ -692,6 +800,10 @@ function kbReset(scanKind) {
   kbRunId = null;
   kbRunKind = scanKind;
   kbSubsExpanded = false;
+  kbSensoStop();
+  kbSenso = null;
+  kbSensoRun = null;
+  kbAsk = { q: '', busy: false, asked: '', answer: null, citations: [], error: '' };
   if (kbTab) kbRender(); else kbCounts();
 }
 
@@ -728,6 +840,17 @@ $('kb').addEventListener('click', e => {
     return;
   }
   if (e.target.closest('[data-kb-subs]')) { kbSubsExpanded = !kbSubsExpanded; kbRender(); }
+});
+
+$('kb').addEventListener('input', e => {
+  if (e.target.closest('[data-kb-ask]')) kbAsk.q = e.target.value;
+});
+
+$('kb').addEventListener('submit', e => {
+  const form = e.target.closest('[data-kb-ask]');
+  if (!form) return;
+  e.preventDefault();
+  kbAskSubmit(form.elements.q.value);
 });
 
 kbCounts();

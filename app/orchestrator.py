@@ -158,7 +158,7 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         _detect_changes(target.target_id, run_id, emit)
 
         _update_run_state(run, "complete")
-        _finish_knowledge(run_id, "complete", emit)
+        await asyncio.to_thread(_finish_knowledge, run_id, "complete", emit)
         emit("report", "info",
              f"Run {run_id} complete: {len(candidates)} candidates, "
              f"{len(verifications)} verifications", None)
@@ -200,13 +200,25 @@ def _record_intel(run_id: str, stack_items: list[StackItem], candidates, advisor
 
 
 def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:
-    """Close out the public-domain knowledge base, if this run built one."""
+    """Close out the public-domain knowledge base, if this run built one. A complete KB is
+    ingested into Senso; that call blocks, so complete runs reach here through to_thread."""
+    from app.integrations import senso
     from app.recon.runner import get_live, save
 
     kb = get_live(run_id)
-    if kb:
-        kb.status = status
-        save(kb, emit)
+    if not kb:
+        return
+    kb.status = status
+    save(kb, emit)
+    if status != "complete":
+        return
+    try:
+        senso.ingest_kb(kb, emit)
+    except Exception as e:  # never let the integration fail a finished run
+        kb.coverage["senso"] = "failed"
+        kb.senso = {"state": "failed", "error": "unexpected error"}
+        emit("report", "warn", f"Senso ingest failed: {type(e).__name__}", None)
+    save(kb, emit)
 
 
 def _run_deep_scans(target, run_id, stack_items, candidates, emit) -> None:
