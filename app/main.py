@@ -5,17 +5,29 @@ import json
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Annotated
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi import Path as PathParam
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app import config, orchestrator, store
-from app.config import DEMO_MODE, PROJECT_ROOT, is_target_authorized
+from app.config import (
+    DEMO_MODE,
+    PROJECT_ROOT,
+    get_allowed_hosts,
+    is_repo_authorized,
+    is_repo_path_allowed,
+    is_target_authorized,
+    resolve_repo_path,
+)
 from app.events import make_emit
 from app.recon.domain import normalize_domain
 from app.recon.runner import get_live
 from app.schema import RunTrigger, Target, TargetKind
+from app.verify.runtime import deploy_url_refusal
 
 
 @asynccontextmanager
@@ -30,23 +42,57 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Continuous Exposure Agent", version="0.1.0", lifespan=lifespan)
 
 
+TARGET_ID_PATTERN = r"^t_[a-z0-9_]{1,40}$"
+RUN_ID_PATTERN = r"^r_[A-Za-z0-9_]{1,60}$"
+# RFC 1123 hostname: no scheme, port, path, userinfo or IP-literal brackets.
+HOSTNAME_PATTERN = (
+    r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
+)
+
+TargetIdPath = Annotated[str, PathParam(pattern=TARGET_ID_PATTERN)]
+RunIdPath = Annotated[str, PathParam(pattern=RUN_ID_PATTERN)]
+
+
 class CreateTargetRequest(BaseModel):
     kind: TargetKind
     name: str = Field(min_length=1, max_length=200)
     # Lets a caller bind to a pre-authorized id from config/demo.yaml (e.g. t_juiceshop).
-    target_id: str | None = Field(default=None, pattern=r"^t_[a-z0-9_]{1,40}$")
-    domain: str | None = None
-    repo: str | None = None
-    deploy_url: str | None = None
+    target_id: str | None = Field(default=None, pattern=TARGET_ID_PATTERN)
+    domain: str | None = Field(default=None, max_length=253, pattern=HOSTNAME_PATTERN)
+    repo: str | None = Field(default=None, min_length=1, max_length=1024)
+    deploy_url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("repo")
+    @classmethod
+    def _no_nul(cls, v: str | None) -> str | None:
+        if v is not None and "\x00" in v:
+            raise ValueError("repo must not contain NUL bytes")
+        return v
+
+    @field_validator("deploy_url")
+    @classmethod
+    def _http_url(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        try:
+            parsed = urlparse(v)
+            parsed.port
+        except ValueError as e:
+            raise ValueError(f"invalid deploy_url: {e}") from None
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError("deploy_url must be an http(s) URL with a hostname")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("deploy_url must not carry credentials")
+        return v
 
 
 class StartRunRequest(BaseModel):
-    target_id: str
+    target_id: str = Field(pattern=TARGET_ID_PATTERN)
     trigger: RunTrigger = "manual"
 
 
 class ReplayRequest(BaseModel):
-    advisory_id: str
+    advisory_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$")
 
 
 def _get_target(target_id: str) -> Target | None:
@@ -69,14 +115,40 @@ def _get_target(target_id: str) -> Target | None:
     return target
 
 
+def _check_pinned_target(target_id: str, req: CreateTargetRequest, repo: str | None) -> None:
+    """A pre-authorized id may only be (re)bound with exactly its configured scope."""
+    authorized, reason = is_target_authorized(target_id, req.kind)
+    if not authorized:
+        raise HTTPException(403, f"Cannot bind pre-authorized target: {reason}")
+    if not is_repo_authorized(target_id, repo):
+        raise HTTPException(403, "Repo does not match the pre-authorized target")
+    if req.deploy_url:
+        refusal = deploy_url_refusal(req.deploy_url, get_allowed_hosts(target_id))
+        if refusal:
+            raise HTTPException(403, refusal)
+
+
 @app.post("/api/targets")
 async def create_target(req: CreateTargetRequest):
-    # A repo path that matches a configured target binds to that target's pre-authorized id.
-    target_id = (
-        req.target_id
-        or config.find_authorized_target_id(req.kind, req.repo)
-        or f"t_{uuid.uuid4().hex[:8]}"
-    )
+    repo = None
+    if req.repo is not None:
+        if not is_repo_path_allowed(req.repo):
+            raise HTTPException(400, "Repo path is outside the allowed repo roots")
+        repo = str(resolve_repo_path(req.repo))
+
+    if req.target_id:
+        target_id = req.target_id
+        if target_id in config.load_demo_config().get("authorized_targets", {}):
+            _check_pinned_target(target_id, req, repo)
+        elif _get_target(target_id):
+            raise HTTPException(409, "Target id already exists")
+    else:
+        # A repo path that matches a configured target binds to that target's pre-authorized id.
+        target_id = (
+            config.find_authorized_target_id(req.kind, req.repo)
+            or f"t_{uuid.uuid4().hex[:8]}"
+        )
+
     domain = req.domain
     if req.kind == "public":
         try:
@@ -88,7 +160,7 @@ async def create_target(req: CreateTargetRequest):
         kind=req.kind,
         name=req.name,
         domain=domain,
-        repo=req.repo,
+        repo=repo,
         deploy_url=req.deploy_url,
     )
     store.insert_target(target)
@@ -108,7 +180,7 @@ async def start_run(req: StartRunRequest):
 
 
 @app.get("/api/runs/{run_id}")
-async def get_run(run_id: str):
+async def get_run(run_id: RunIdPath):
     run = store.get_run(run_id)
     if not run:
         raise HTTPException(404, "Run not found")
@@ -121,7 +193,7 @@ def _rows_by_key(query: str, params: dict) -> dict:
 
 
 @app.get("/api/runs/{run_id}/report")
-async def get_report(run_id: str):
+async def get_report(run_id: RunIdPath):
     """Ranked findings with evidence chains."""
     run = store.get_run(run_id)
     if not run:
@@ -200,7 +272,7 @@ async def get_report(run_id: str):
 
 
 @app.get("/api/runs/{run_id}/knowledge")
-async def get_knowledge(run_id: str):
+async def get_knowledge(run_id: RunIdPath):
     """Latest knowledge base snapshot for a public-domain run."""
     kb = get_live(run_id)
     if kb:
@@ -211,8 +283,29 @@ async def get_knowledge(run_id: str):
     return Response(doc, media_type="application/json")
 
 
+@app.get("/api/runs/{run_id}/vulnscan")
+async def get_vulnscan(run_id: RunIdPath):
+    """Deep dependency / secret / misconfiguration findings for a run."""
+    from app import scanner
+    return {"run_id": run_id, "findings": scanner.get_scan_results(run_id, "vulnscan") or []}
+
+
+@app.get("/api/runs/{run_id}/endpoints")
+async def get_endpoints(run_id: RunIdPath):
+    """Enumerated attack-surface endpoints for a run."""
+    from app import scanner
+    return {"run_id": run_id, "endpoints": scanner.get_scan_results(run_id, "endpoints") or []}
+
+
+@app.get("/api/runs/{run_id}/threats")
+async def get_threats(run_id: RunIdPath):
+    """Correlated threat patterns for a run."""
+    from app import scanner
+    return {"run_id": run_id, "threats": scanner.get_scan_results(run_id, "threats") or []}
+
+
 @app.get("/api/targets/{target_id}/changes")
-async def get_changes(target_id: str):
+async def get_changes(target_id: TargetIdPath):
     """Diff between the latest two complete runs."""
     result = store.get_client().query(
         "SELECT run_id FROM runs WHERE target_id = {t:String} AND state = 'complete' "
@@ -243,7 +336,10 @@ async def get_changes(target_id: str):
 
 
 @app.get("/api/events")
-async def get_events(target_id: str, since: str | None = None):
+async def get_events(
+    target_id: Annotated[str, Query(pattern=TARGET_ID_PATTERN)],
+    since: Annotated[str | None, Query(max_length=64)] = None,
+):
     since_dt = None
     if since:
         try:

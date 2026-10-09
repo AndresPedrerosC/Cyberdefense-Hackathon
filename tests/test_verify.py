@@ -265,6 +265,44 @@ def test_runtime_network_error_is_swallowed(emit):
     assert any(c.args[1] == "warn" for c in emit.call_args_list)
 
 
+@pytest.mark.parametrize("url", [
+    "file://localhost:3004/etc/passwd",       # non-http scheme on an allowed host:port
+    "gopher://localhost:3004/_INFO",
+    "http://localhost:3004@evil.example.com/",  # userinfo trick: real host is evil
+    "http://evil.example.com#@localhost:3004",
+    "http://admin:pw@localhost:3004/",         # credentials smuggled to allowed host
+    "http://localhost:99999/",                 # invalid port used to raise ValueError
+    "http:///nohost",
+])
+def test_runtime_refuses_ssrf_variants_without_connecting(emit, url):
+    with patch.object(runtime_mod.httpx, "Client") as client:
+        out = check_runtime([mk_candidate()], url, ["localhost:3004"], emit)
+    assert out == {}
+    client.assert_not_called()
+    assert emit.call_args.args[1] == "error"
+
+
+def test_runtime_does_not_follow_redirects(emit):
+    client = MagicMock()
+    client.__enter__.return_value = client
+    client.get.return_value = MagicMock(headers={})
+    with patch.object(runtime_mod.httpx, "Client", return_value=client) as ctor:
+        check_runtime([mk_candidate()], "http://localhost:3004", ["localhost:3004"], emit)
+    assert ctor.call_args.kwargs["follow_redirects"] is False
+
+
+def test_verify_scans_repo_resolved_from_project_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # a cwd-relative resolution would point here
+    cand = mk_candidate()
+    with patch("app.verify.load_registry", return_value={}), \
+         patch("app.verify.check_presence", return_value={cand.id: True}) as pres, \
+         patch("app.verify.run_semgrep", return_value={}) as sem:
+        verify([cand], {"s1": mk_stack()}, {}, mk_target(repo="demo/juice-shop"), RUN, MagicMock())
+    expected = str((ROOT / "demo" / "juice-shop").resolve())
+    assert pres.call_args.args[2] == expected
+    assert sem.call_args.args[0] == expected
+
+
 def test_verify_passes_allowed_hosts_to_runtime():
     t = mk_target("owned_deployment", deploy_url="http://localhost:3004")
     cand = mk_candidate()

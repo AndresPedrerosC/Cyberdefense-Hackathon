@@ -7,6 +7,7 @@ import tempfile
 import shutil
 from pathlib import Path
 
+from app import config
 from app.schema import Target, StackItem, Emit
 from app.ids import stack_item_id
 
@@ -15,7 +16,10 @@ LOCK_CACHE_DIR = Path(__file__).resolve().parents[2] / "data" / "cache" / "lockf
 
 def discover_repo(target: Target, run_id: str, emit: Emit) -> list[StackItem]:
     """Discover stack from a connected repository."""
-    repo_path = Path(target.repo).resolve()
+    if not config.is_repo_path_allowed(target.repo):
+        emit("discovery", "error", "Repo path is outside ALLOWED_REPO_ROOTS; refusing to scan", None)
+        return []
+    repo_path = config.resolve_repo_path(target.repo)
 
     if not repo_path.exists():
         emit("discovery", "error", f"Repo path does not exist: {repo_path}", None)
