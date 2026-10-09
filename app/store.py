@@ -31,6 +31,8 @@ def get_client() -> Client:
             username=CLICKHOUSE_USER,
             password=CLICKHOUSE_PASSWORD or "",
             database=CLICKHOUSE_DATABASE,
+            # Shared across pipeline threads; ClickHouse rejects concurrent queries per session.
+            autogenerate_session_id=False,
         )
     return _client
 

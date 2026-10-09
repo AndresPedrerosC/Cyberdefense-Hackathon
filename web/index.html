@@ -1,99 +1,86 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Continuous Exposure Agent</title>
-    <link rel="stylesheet" href="/styles.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Continuous Exposure Agent</title>
+  <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-    <header>
-        <h1>Continuous Exposure Agent</h1>
-        <div class="stats" id="stats">
-            <span id="corpus-count">-- advisories</span>
-            <span id="query-latency">-- ms</span>
-        </div>
-    </header>
+  <header>
+    <h1>Continuous Exposure Agent</h1>
+    <div class="stats">
+      <span id="corpus-count">-- advisories</span>
+      <span id="query-latency">-- ms</span>
+    </div>
+  </header>
 
-    <main>
-        <!-- Region 1: Input -->
-        <section class="panel" id="input-panel">
-            <h2>Target</h2>
-            <div class="input-group">
-                <label>
-                    <input type="radio" name="target-type" value="repo" checked> Connected Repo
-                </label>
-                <label>
-                    <input type="radio" name="target-type" value="public"> Public Domain
-                </label>
-            </div>
-            <div id="repo-input">
-                <input type="text" id="repo-path" placeholder="Path or URL (e.g., demo/juice-shop)">
-            </div>
-            <div id="domain-input" style="display:none">
-                <input type="text" id="domain" placeholder="Domain (e.g., example.com)">
-                <p class="hint">Confirm this is the correct domain before scanning</p>
-            </div>
-            <button id="start-btn">Start Scan</button>
-            <div id="auth-status"></div>
-        </section>
-
-        <!-- Region 2: Live Feed -->
-        <section class="panel" id="feed-panel">
-            <h2>Live Activity</h2>
-            <div id="feed" class="feed"></div>
-        </section>
-
-        <!-- Region 3: Findings -->
-        <section class="panel" id="findings-panel">
-            <h2>Findings</h2>
-            <div class="filters">
-                <label><input type="checkbox" id="filter-direct" checked> Direct deps only</label>
-                <label><input type="checkbox" id="filter-confirmed" checked> Confirmed matches</label>
-            </div>
-            <table id="findings-table">
-                <thead>
-                    <tr>
-                        <th>#</th>
-                        <th>Package</th>
-                        <th>Advisory</th>
-                        <th>Severity</th>
-                        <th>Match</th>
-                        <th>Status</th>
-                        <th>Fix</th>
-                    </tr>
-                </thead>
-                <tbody id="findings-body"></tbody>
-            </table>
-        </section>
-
-        <!-- Region 4: Monitoring -->
-        <section class="panel" id="monitor-panel">
-            <h2>Monitoring</h2>
-            <div class="monitor-stats">
-                <div><span class="label">Last poll:</span> <span id="last-poll">--</span></div>
-                <div><span class="label">Next poll:</span> <span id="next-poll">--</span></div>
-                <div><span class="label">Records:</span> <span id="record-count">--</span></div>
-            </div>
-            <div id="changes">
-                <h3>Changes Since Last Scan</h3>
-                <ul id="changes-list"></ul>
-            </div>
-            <div id="demo-controls" style="display:none">
-                <button id="replay-btn">Replay Held-back Advisory</button>
-            </div>
-        </section>
-    </main>
-
-    <!-- Evidence Modal -->
-    <div id="modal" class="modal" style="display:none">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h3>Evidence Chain</h3>
-            <div id="evidence-content"></div>
-        </div>
+  <div class="layout">
+    <!-- Input -->
+    <div class="panel" id="input-panel">
+      <h2>Target</h2>
+      <div class="radio-row">
+        <label><input type="radio" name="target-type" value="repo" checked> Connected Repo</label>
+        <label><input type="radio" name="target-type" value="public"> Public Domain</label>
+      </div>
+      <div id="repo-input">
+        <input type="text" id="repo-path" placeholder="demo/juice-shop">
+      </div>
+      <div id="domain-input" style="display:none">
+        <input type="text" id="domain" placeholder="example.com">
+        <p class="hint">Confirm this is the correct domain before scanning.</p>
+      </div>
+      <button id="start-btn">Start Scan</button>
+      <div id="auth-status"></div>
     </div>
 
-    <script src="/app.js"></script>
+    <!-- Feed -->
+    <div class="panel" id="feed-panel">
+      <h2>Live Activity</h2>
+      <div id="feed"></div>
+    </div>
+
+    <!-- Monitor -->
+    <div class="panel" id="monitor-panel">
+      <h2>Monitoring</h2>
+      <div class="mon-row"><span class="k">Records</span><span id="record-count">--</span></div>
+      <div id="changes-list">
+        <h3>Changes Since Last Scan</h3>
+        <ul></ul>
+      </div>
+      <button id="demo-btn">Replay Advisory</button>
+    </div>
+
+    <!-- Findings -->
+    <div class="panel" id="findings-panel">
+      <h2>Findings</h2>
+      <div class="filter-bar">
+        <label><input type="checkbox" id="filter-direct" checked> Direct only</label>
+        <label><input type="checkbox" id="filter-confirmed" checked> Confirmed only</label>
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th><th>Package</th><th>Advisory</th><th>Severity</th>
+              <th>Match</th><th>Status</th><th>Fix</th>
+            </tr>
+          </thead>
+          <tbody id="findings-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div class="overlay" id="modal-overlay">
+    <div class="modal">
+      <span class="close" id="modal-close">&times;</span>
+      <h3>Evidence Chain</h3>
+      <div id="evidence-content"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
 </body>
 </html>
