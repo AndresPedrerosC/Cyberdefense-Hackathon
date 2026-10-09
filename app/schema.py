@@ -10,7 +10,8 @@ import uuid
 
 # Type aliases
 TargetKind = Literal["public", "connected_repo", "owned_deployment"]
-Ecosystem = Literal["npm", "unknown"]
+# cpe: server software matched via CISA KEV / NVD; config: posture findings for a domain.
+Ecosystem = Literal["npm", "cpe", "config", "unknown"]
 Confidence = Literal["high", "medium", "low"]
 StackItemStatus = Literal["inferred", "confirmed"]
 MatchType = Literal["confirmed", "possible"]

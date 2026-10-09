@@ -1,13 +1,12 @@
 """Public-inference discovery (passive only)."""
 
 import re
-from pathlib import Path
 
-from app.schema import Target, StackItem, Emit
-from app.ids import stack_item_id
-from app.discovery.net import safe_fetch
 from app.discovery.aliases import resolve_alias
-
+from app.ids import stack_item_id
+from app.recon.domain import normalize_domain
+from app.recon.kb import KnowledgeBase, Tech
+from app.schema import Emit, StackItem, Target
 
 # Patterns for extracting tech from public pages
 VERSION_IN_URL = re.compile(r'[@/-](\d+\.\d+\.\d+)(?:[.-]|$|min\.js)')
@@ -19,39 +18,44 @@ JQUERY_VERSION = re.compile(r'jquery[.-]?(\d+\.\d+\.\d+)')
 
 
 def discover_public(target: Target, run_id: str, emit: Emit) -> list[StackItem]:
-    """Discover stack from public pages (passive only)."""
+    """Build the knowledge base for a public domain, then infer npm components from its pages."""
+    # Lazy: app.recon collectors import app.discovery.net, whose package imports this module.
+    from app.recon.runner import build_knowledge, save
+
     if not target.domain:
         emit("discovery", "warn", "No domain for public discovery", None)
         return []
+    try:
+        domain = normalize_domain(target.domain)
+    except ValueError as e:
+        emit("discovery", "error", f"Invalid domain {target.domain!r}: {e}", None)
+        return []
 
-    emit("discovery", "info", f"Public discovery for {target.domain}", None)
+    emit("discovery", "info", f"Public recon for {domain}", None)
+    kb = KnowledgeBase(domain=domain, run_id=run_id, target_id=target.target_id)
+    pages = build_knowledge(kb, emit)
 
     items = []
     seen_packages = set()
+    for page in pages:
+        if page.status != 200 or not page.html:
+            continue
+        url = page.final_url or page.url
+        items.extend(_extract_from_headers(target, run_id, page.headers, url, seen_packages))
+        items.extend(_extract_from_content(target, run_id, page.html, url, seen_packages))
 
-    # Seed pages
-    pages = [
-        f"https://{target.domain}/",
-        f"https://{target.domain}/about",
-        f"https://{target.domain}/careers",
-    ]
+    for item in items:
+        kb.add_tech(Tech(
+            name=item.name or item.package or "?", category="js-library", version=item.version,
+            npm=item.package, confidence=item.confidence, evidence=item.evidence or "",
+            source=item.source_url or "",
+        ))
+    save(kb, emit)
 
-    for url in pages:
-        try:
-            text, headers = safe_fetch(url, target.target_id, emit)
-            if not text:
-                continue
+    from app.agent.research import research
+    research(kb, pages, emit, save)
 
-            # Extract from headers
-            items.extend(_extract_from_headers(target, run_id, headers, url, seen_packages))
-
-            # Extract from page content
-            items.extend(_extract_from_content(target, run_id, text, url, seen_packages))
-
-        except Exception as e:
-            emit("discovery", "warn", f"Failed to fetch {url}: {e}", None)
-
-    emit("discovery", "info", f"Public discovery found {len(items)} items", None)
+    emit("discovery", "info", f"Public discovery found {len(items)} npm components", None)
     return items
 
 

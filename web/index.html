@@ -37,6 +37,18 @@
       </div>
 
       <div class="nav-group">
+        <div class="nav-label">Knowledgebase</div>
+        <button class="nav-item" data-view="target">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2c1.8 1.7 2.6 3.7 2.6 6S9.8 12.3 8 14M8 2C6.2 3.7 5.4 5.7 5.4 8s.8 4.3 2.6 6"/></svg>
+          Target<span class="nav-count mono" id="nav-kb-target">--</span>
+        </button>
+        <button class="nav-item" data-view="exposure">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5.5 2.1v4c0 3.2-2.3 5.5-5.5 6.3-3.2-.8-5.5-3.1-5.5-6.3v-4z"/><path d="M8 5v3.5M8 10.8v.2"/></svg>
+          Exposure<span class="nav-count mono" id="nav-kb-exposure">--</span>
+        </button>
+      </div>
+
+      <div class="nav-group">
         <div class="nav-label">Target</div>
         <div class="nav-kv"><span>Name</span><span class="mono" id="nav-target">none</span></div>
         <div class="nav-kv"><span>ID</span><span class="mono" id="nav-target-id">--</span></div>
@@ -72,7 +84,10 @@
     </header>
 
     <!-- Center canvas -->
-    <main class="canvas">
+    <main class="canvas" id="canvas">
+      <!-- Knowledgebase reading view: replaces the scan view while Target or Exposure is open -->
+      <article class="kb" id="kb" hidden aria-live="polite"></article>
+
       <section class="strip">
         <div class="strip-h">
           <div>

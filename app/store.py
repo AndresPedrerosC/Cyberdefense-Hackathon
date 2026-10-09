@@ -247,6 +247,23 @@ def insert_event(event: Event) -> None:
     )
 
 
+def insert_knowledge(run_id: str, target_id: str, status: str, doc: str) -> None:
+    """Append a knowledge base snapshot; readers take the latest ts for the run."""
+    get_client().insert(
+        "knowledge",
+        [[run_id, target_id, datetime.utcnow(), status, doc]],
+        column_names=["run_id", "target_id", "ts", "status", "doc"],
+    )
+
+
+def get_knowledge(run_id: str) -> str | None:
+    result = get_client().query(
+        "SELECT doc FROM knowledge WHERE run_id = {r:String} ORDER BY ts DESC LIMIT 1",
+        parameters={"r": run_id},
+    )
+    return result.result_rows[0][0] if result.result_rows else None
+
+
 # Query functions
 def _timed_query(query: str, params: dict | None = None):
     global _last_query_latency_ms

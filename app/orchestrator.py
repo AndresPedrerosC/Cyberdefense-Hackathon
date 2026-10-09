@@ -149,6 +149,7 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         _detect_changes(target.target_id, run_id, emit)
 
         _update_run_state(run, "complete")
+        _finish_knowledge(run_id, "complete", emit)
         emit("report", "info",
              f"Run {run_id} complete: {len(candidates)} candidates, "
              f"{len(verifications)} verifications", None)
@@ -156,10 +157,21 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
     except Exception as e:
         failed_stage = run.state
         _update_run_state(run, "failed", f"{failed_stage}: {e}")
+        _finish_knowledge(run_id, "failed", emit)
         emit("system", "error", f"Run {run_id} failed at {failed_stage}: {e}", None)
         raise
 
     return run_id
+
+
+def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:
+    """Close out the public-domain knowledge base, if this run built one."""
+    from app.recon.runner import get_live, save
+
+    kb = get_live(run_id)
+    if kb:
+        kb.status = status
+        save(kb, emit)
 
 
 def _detect_changes(target_id: str, current_run_id: str, emit: Emit) -> None:

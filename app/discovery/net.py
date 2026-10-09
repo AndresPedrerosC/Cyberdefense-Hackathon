@@ -1,14 +1,15 @@
 """Safe network utilities with SSRF protection."""
 
 import ipaddress
+import json
 import socket
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 
 from app.schema import Emit
-
 
 BLOCKED_RANGES = [
     ipaddress.ip_network("0.0.0.0/8"),
@@ -72,18 +73,45 @@ def _check_url(url: str) -> str | None:
 
 def safe_fetch(url: str, target_id: str, emit: Emit) -> tuple[str | None, dict]:
     """Passive GET with SSRF protection; every redirect hop is re-validated."""
+    page = fetch_page(url, target_id, emit)
+    if page is None:
+        return None, {}
+    if page["status"] != 200:
+        return None, page["headers"]
+    return page["text"], page["headers"]
+
+
+def fetch_page(
+    url: str,
+    target_id: str,
+    emit: Emit,
+    timeout: float = TIMEOUT,
+    max_body: int = MAX_BODY,
+    use_cache: bool = True,
+    allow_host: Callable[[str], bool] | None = None,
+) -> dict | None:
+    """SSRF-safe GET returning status, headers, cookies, final URL and body for any status.
+
+    Returns None when the URL or a redirect hop is blocked, or the request fails.
+    allow_host, when given, additionally restricts every hop (e.g. to the target's own domain).
+    """
     reason = _check_url(url)
     if reason:
-        emit("discovery", "warn", f"Blocked {url}: {reason}", None)
-        return None, {}
+        emit("discovery", "warn", f"Blocked {_short(url)}: {reason}", None)
+        return None
 
     cache_path = _get_cache_path(target_id, url)
-    if cache_path.exists():
+    meta_path = cache_path.with_suffix(".json")
+    if use_cache and cache_path.exists() and meta_path.exists():
         emit("discovery", "info", f"Using cached: {url}", None)
-        return cache_path.read_text(), {}
+        try:
+            meta = json.loads(meta_path.read_text())
+            return {**meta, "text": cache_path.read_text()}
+        except (OSError, ValueError):
+            pass
 
     try:
-        with httpx.Client(timeout=TIMEOUT, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
             current = url
             for _ in range(MAX_REDIRECTS + 1):
                 with client.stream("GET", current, headers={"User-Agent": USER_AGENT}) as response:
@@ -91,33 +119,49 @@ def safe_fetch(url: str, target_id: str, emit: Emit) -> tuple[str | None, dict]:
                         location = response.headers.get("location", "")
                         nxt = str(response.url.join(location))
                         reason = _check_url(nxt)
+                        if not reason and allow_host and not allow_host(urlparse(nxt).hostname):
+                            reason = "outside the allowed scope"
                         if reason:
-                            emit("discovery", "warn", f"Blocked redirect to {nxt}: {reason}", None)
-                            return None, {}
+                            emit("discovery", "warn",
+                                 f"Blocked redirect to {_short(nxt)}: {reason}", None)
+                            return None
                         current = nxt
                         continue
 
-                    headers = dict(response.headers)
-                    if response.status_code != 200:
-                        return None, headers
-
+                    cookies = response.headers.get_list("set-cookie")
+                    headers = {
+                        k.lower(): v for k, v in response.headers.items() if k.lower() != "set-cookie"
+                    }
                     body = bytearray()
                     for chunk in response.iter_bytes():
                         body.extend(chunk)
-                        if len(body) >= MAX_BODY:
+                        if len(body) >= max_body:
                             break
-                    content = bytes(body[:MAX_BODY]).decode(response.encoding or "utf-8", "replace")
-
-                    cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    cache_path.write_text(content)
-                    return content, headers
+                    text = bytes(body[:max_body]).decode(response.encoding or "utf-8", "replace")
+                    meta = {
+                        "url": url,
+                        "final_url": str(response.url),
+                        "status": response.status_code,
+                        "headers": headers,
+                        "set_cookies": cookies,
+                    }
+                    if use_cache:
+                        cache_path.parent.mkdir(parents=True, exist_ok=True)
+                        cache_path.write_text(text)
+                        meta_path.write_text(json.dumps(meta))
+                    return {**meta, "text": text}
 
             emit("discovery", "warn", f"Too many redirects: {url}", None)
-            return None, {}
+            return None
 
     except Exception as e:
         emit("discovery", "warn", f"Fetch failed: {url} ({e})", None)
-        return None, {}
+        return None
+
+
+def _short(url: str, limit: int = 160) -> str:
+    """Trim long URLs (tokens in query strings) for the event feed."""
+    return url if len(url) <= limit else url[:limit] + "..."
 
 
 def _get_cache_path(target_id: str, url: str) -> Path:

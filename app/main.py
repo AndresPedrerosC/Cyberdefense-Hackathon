@@ -6,13 +6,15 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app import config, orchestrator, store
 from app.config import DEMO_MODE, PROJECT_ROOT, is_target_authorized
 from app.events import make_emit
+from app.recon.domain import normalize_domain
+from app.recon.runner import get_live
 from app.schema import RunTrigger, Target, TargetKind
 
 
@@ -75,11 +77,17 @@ async def create_target(req: CreateTargetRequest):
         or config.find_authorized_target_id(req.kind, req.repo)
         or f"t_{uuid.uuid4().hex[:8]}"
     )
+    domain = req.domain
+    if req.kind == "public":
+        try:
+            domain = normalize_domain(req.domain or req.name)
+        except ValueError as e:
+            raise HTTPException(400, f"Invalid domain: {e}")
     target = Target(
         target_id=target_id,
         kind=req.kind,
         name=req.name,
-        domain=req.domain,
+        domain=domain,
         repo=req.repo,
         deploy_url=req.deploy_url,
     )
@@ -189,6 +197,18 @@ async def get_report(run_id: str):
         })
 
     return {"run_id": run_id, "state": run["state"], "summary": summary, "findings": findings}
+
+
+@app.get("/api/runs/{run_id}/knowledge")
+async def get_knowledge(run_id: str):
+    """Latest knowledge base snapshot for a public-domain run."""
+    kb = get_live(run_id)
+    if kb:
+        return Response(kb.model_dump_json(), media_type="application/json")
+    doc = await asyncio.to_thread(store.get_knowledge, run_id)
+    if not doc:
+        raise HTTPException(404, "No knowledge base for this run")
+    return Response(doc, media_type="application/json")
 
 
 @app.get("/api/targets/{target_id}/changes")
