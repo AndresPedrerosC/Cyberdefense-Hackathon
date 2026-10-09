@@ -155,7 +155,7 @@ export default function Dashboard() {
               <div className="kpi"><b>{report?.observations.length ?? 0}</b><span>Components</span></div>
               <div className="kpi"><b>{findings.length}</b><span>Advisory matches</span></div>
               <div className="kpi"><b style={{ color: critical ? 'var(--crit)' : undefined }}>{critical}</b><span>High / critical</span></div>
-              <div className="kpi"><b style={{ color: verified ? 'var(--accent)' : undefined }}>{verified}</b><span>Exposure verified</span></div>
+              <div className="kpi"><b style={{ color: verified ? 'var(--gold)' : undefined }}>{verified}</b><span>Exposure verified</span></div>
             </div>
 
             <div className="panel">
