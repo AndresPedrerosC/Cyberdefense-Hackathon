@@ -1,0 +1,705 @@
+<!doctype html>
+<!--
+=========================================================================================
+  STACKWATCH: DESIGN + MOTION SYSTEM  (implementation reference)
+=========================================================================================
+  What this file is
+    The single source of truth for how the Stackwatch demo looks and moves. Open it in a
+    browser to see every token and component live. Read the source to implement them.
+
+  Where it came from
+    Ported from the nationgraph "Signal to Draft" system, recolored for a full dark theme:
+    gold = action and brand, green = verified and confirmed, red = exposed and rejected.
+
+  How to implement it in the app
+    1. Copy the :root tokens below into the app's global stylesheet unchanged.
+    2. Build components to match the "Components" sections. Class names here are the contract.
+    3. Every animation uses a motion token and a utility class. No raw durations in components.
+
+  Visual non-negotiables (this is what makes it not look like slop)
+    - Flat. No container borders, no boxes around everything, no shadows anywhere.
+    - Surfaces are differentiated by SOLID FILL, used sparingly, with straight edges (radius 0).
+    - Structure is carried by LAYOUT and full-width rules, not by drawing a line around content.
+    - Controls (buttons, inputs) are slightly rounded. Nothing else is.
+    - One conservative gradient, on the single primary button only. Everywhere else is flat fill.
+    - One typeface (Inter Tight). Mono (JetBrains Mono) only for versions, IDs, timestamps, code.
+    - Solid tags are for STATUS only (severity, verification). Everything else is a dot + label.
+    - Provenance beats decoration: every claim shows its source and how it was checked.
+    - No em dashes in UI copy.
+=========================================================================================
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Stackwatch · Design + Motion System</title>
+<meta name="description" content="Flat dark-theme design system for the Stackwatch demo: tokens, components, and motion, built on layout and fills rather than boxes and borders." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+/* =====================================================================================
+   1. TOKENS
+   ===================================================================================== */
+:root{
+  color-scheme: dark;
+
+  /* ---- Color: surfaces (solid black, flat fills, straight edges) ---- */
+  --bg:#000000;          /* solid black page background, where most content lives directly */
+  --fill-1:#0e0e0e;      /* subtle raised fill: expanded detail, muted strips */
+  --fill-2:#181818;      /* input / code fill, one step lighter */
+  --fill-3:#242424;      /* hover fill on rows and ghost controls */
+  --line:#242424;        /* the ONLY line color: full-width rules + row separators */
+
+  /* ---- Color: text ---- */
+  --text:#ffffff;        /* primary, solid white */
+  --text-2:#a6a6a6;      /* secondary, captions, labels */
+  --text-3:#6e6e6e;      /* tertiary, metadata, placeholders */
+
+  /* ---- Color: gold (action + brand) ---- */
+  --gold:#e3b341;
+  --gold-hi:#f2cb66;     /* gradient start on the primary button only */
+  --gold-ink:#241a04;    /* text on a gold fill */
+  --gold-soft:#7a5f1f;   /* gold used as a quiet dot/text on dark */
+
+  /* ---- Color: green (verified + confirmed) ---- */
+  --green:#3fb27f;
+  --green-hi:#5ccf98;
+  --green-ink:#042016;   /* text on a green fill */
+
+  /* ---- Color: severity spectrum (data encoding, solid tags only) ---- */
+  --sev-critical:#e5534b;
+  --sev-high:#e08b3a;
+  --sev-medium:#e3b341;
+  --sev-low:#3fb27f;
+  --sev-unknown:#7d8a82;
+
+  /* ---- Color: washes (motion + highlight only, never as a container background) ---- */
+  --gold-wash:rgba(227,179,65,.16);  /* new-row flash, quote highlight */
+  --red-wash:rgba(229,83,75,.14);
+
+  /* ---- Shape: controls slightly rounded, containers straight ---- */
+  --r-ctl:6px;           /* buttons, inputs */
+  --r-tag:4px;           /* status tags */
+  --r-0:0px;             /* containers and fills: straight edges, always */
+
+  /* ---- Type (one family + mono) ---- */
+  --font:"Inter Tight", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono:"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --fs-xs:12px;          /* tag text, metadata, timestamps */
+  --fs-sm:13.5px;        /* labels, captions, secondary */
+  --fs-md:15px;          /* body, cells, buttons */
+  --fs-lg:18px;          /* lead paragraphs, quotes */
+  --fs-xl:22px;          /* section headings */
+  --fs-2xl:clamp(30px,4vw,46px); /* hero display */
+
+  /* =====================================================================================
+     2. MOTION TOKENS
+     Functional and quick, like the dashboards people trust. Motion confirms an action, shows
+     where something went, or signals that work is happening. It never decorates, never fakes work.
+     ===================================================================================== */
+  --dur-fast:120ms;      /* hover, press, focus, switch thumb */
+  --dur-base:200ms;      /* state changes: tag swap, tab switch */
+  --dur-moderate:280ms;  /* expand / collapse rows, dropdowns */
+  --dur-slow:440ms;      /* the primary button's shine sweep */
+  --dur-highlight:1200ms;/* the one long one: a changed row fades from gold-wash */
+  --dur-loop:1600ms;     /* skeleton shimmer cycle */
+  --dur-spin:800ms;      /* spinner rotation */
+
+  --ease-standard:cubic-bezier(0.2,0,0,1);  /* default for anything that moves or changes */
+  --ease-enter:cubic-bezier(0,0,0,1);       /* arriving: decelerate into place */
+  --ease-exit:cubic-bezier(0.3,0,1,1);      /* leaving: accelerate away, at 0.75x duration */
+  --ease-linear:linear;                     /* loops only (shimmer, spin) */
+
+  --travel:6px;          /* max distance anything slides; never more than 8px */
+  --stagger:40ms;        /* between siblings appearing together; cap total at 200ms */
+}
+@media (prefers-reduced-motion: reduce){
+  :root{ --dur-moderate:120ms; --dur-highlight:0ms; --travel:0px; --stagger:0ms; }
+  *,*::before,*::after{ animation-duration:0ms !important; animation-iteration-count:1 !important; }
+}
+
+/* =====================================================================================
+   MOTION RULES (read before animating anything)
+   1. Animate only opacity, transform, background-color. Row expand uses grid-template-rows
+      0fr -> 1fr, which is cheap and needs no measuring.
+   2. Enter with --ease-enter; exit with --ease-exit at 0.75x the enter duration.
+   3. Travel is at most 8px. No bounce, no overshoot, no parallax, no scroll reveals in the app.
+   4. Motion never fakes work. Show results as fast as they arrive. Over ~300ms show a skeleton;
+      a button action under 2s shows an inline spinner on that button.
+   5. Tables never animate re-sorting. A row that changed gets one --dur-highlight background fade.
+   6. Focus rings are instant. Hover and press use --dur-fast.
+   7. Every animated element has a final resting state fully visible without JS.
+   ===================================================================================== */
+
+/* =====================================================================================
+   3. BASE
+   ===================================================================================== */
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:var(--bg); color:var(--text); font-family:var(--font); font-size:var(--fs-md);
+  line-height:1.55; -webkit-font-smoothing:antialiased; font-variant-numeric:tabular-nums;
+}
+h1,h2,h3,h4{margin:0;font-weight:600;letter-spacing:-.015em;color:var(--text);text-wrap:balance}
+p{margin:0}
+a{color:var(--gold);text-decoration:none}
+a:hover{color:var(--gold-hi)}
+code,.mono{font-family:var(--mono);font-size:.92em}
+:focus-visible{outline:2px solid var(--gold);outline-offset:2px;border-radius:4px}
+
+.wrap{max-width:1100px;margin:0 auto;padding:0 clamp(20px,5vw,40px)}
+
+/* The structural primitive: a full-width rule. Structure is carried by these + spacing. */
+.rule{height:1px;background:var(--line);border:0;margin:0}
+
+/* Section rhythm: generous vertical space, one rule between, no boxes. */
+.section{padding:64px 0}
+.section + .section{border-top:1px solid var(--line)}
+.sec-h{max-width:760px;margin-bottom:36px}
+.eyebrow{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.16em;color:var(--gold);font-weight:600}
+.sec-h h2{font-size:var(--fs-xl);margin-top:10px}
+.sec-h p{margin-top:10px;color:var(--text-2);font-size:var(--fs-lg);line-height:1.5}
+.sub{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.1em;color:var(--text-3);font-weight:600;margin-bottom:14px}
+.group + .group{margin-top:40px}
+
+.cols-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:40px}
+.cols-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px}
+@media (max-width:820px){.cols-2,.cols-3{grid-template-columns:minmax(0,1fr)}}
+
+/* =====================================================================================
+   4. HERO
+   ===================================================================================== */
+.hero{padding:88px 0 56px}
+.brandline{display:inline-flex;align-items:center;gap:12px;margin-bottom:28px}
+.mark{width:32px;height:32px;border-radius:7px;background:linear-gradient(135deg,var(--gold-hi),var(--gold));position:relative}
+.mark::after{content:"";position:absolute;inset:9px;border-radius:3px;background:var(--bg);clip-path:polygon(0 55%,40% 100%,100% 10%,86% 0,40% 72%,12% 44%)}
+.wordmark{font-weight:700;font-size:17px;letter-spacing:-.01em}
+.wordmark em{font-style:normal;color:var(--gold)}
+.hero h1{font-size:var(--fs-2xl);font-weight:700;max-width:16ch;line-height:1.05}
+.hero p{margin-top:18px;max-width:60ch;color:var(--text-2);font-size:var(--fs-lg)}
+.hero .legend{margin-top:28px;display:flex;flex-wrap:wrap;gap:24px}
+
+/* =====================================================================================
+   5. COMPONENTS
+   ===================================================================================== */
+
+/* ---- Swatch: a solid color block (straight edges, no border), label sits on the page ---- */
+.swrow{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:20px 16px}
+.swatch{display:grid;gap:8px}
+.swatch .chip{height:72px;border-radius:var(--r-0)}
+.swatch b{font-weight:600;font-size:var(--fs-sm)}
+.swatch code{color:var(--text-3);font-size:var(--fs-xs)}
+
+/* ---- Type specimen: no box, separated by rules ---- */
+.specimen{display:grid;gap:4px;padding:18px 0}
+.specimen + .specimen{border-top:1px solid var(--line)}
+.specimen .d{color:var(--text-3);font-size:var(--fs-xs);font-family:var(--mono)}
+.t2xl{font-size:var(--fs-2xl);font-weight:700;letter-spacing:-.02em;line-height:1.05}
+.txl{font-size:var(--fs-xl);font-weight:600}
+.tlg{font-size:var(--fs-lg);font-weight:600}
+.tmd{font-size:var(--fs-md)}
+.tsm{font-size:var(--fs-sm);color:var(--text-2)}
+
+/* ---- KPI row: numbers on the page, separated by thin vertical rules, no cards ---- */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr))}
+.kpi{padding:4px 22px;display:grid;gap:4px}
+.kpi + .kpi{border-left:1px solid var(--line)}
+.kpi:first-child{padding-left:0}
+.kpi .k{font-size:var(--fs-sm);color:var(--text-2)}
+.kpi .v{font-size:32px;font-weight:700;letter-spacing:-.02em}
+.kpi .v.gold{color:var(--gold)} .kpi .v.green{color:var(--green)} .kpi .v.red{color:var(--sev-critical)}
+.kpi .d{font-size:var(--fs-xs);color:var(--text-3)}
+@media (max-width:820px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr));gap:24px 0}.kpi+.kpi{border-left:0}.kpi{padding-left:0}}
+
+/* ---- Buttons: flat solid fills, slightly rounded; one gradient for primary only ---- */
+.btnrow{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:0;border-radius:var(--r-ctl);padding:10px 18px;font:inherit;font-size:var(--fs-md);font-weight:600;cursor:pointer;
+  transition:filter var(--dur-fast) var(--ease-standard),transform var(--dur-fast) var(--ease-standard)}
+.btn:hover{filter:brightness(1.08)}
+.btn:active{transform:scale(.98)}
+.btn:disabled{opacity:.4;cursor:not-allowed;filter:none;transform:none}
+/* the ONE gradient, with a subtle flare: top sheen, a light sweep on hover, a tactile lift + press */
+.btn-primary{position:relative;overflow:hidden;color:var(--gold-ink);
+  background:linear-gradient(135deg,var(--gold-hi) 0%,var(--gold) 48%,#e07a1e 100%); /* theme gold into a hardcoded orange */
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.35), inset 0 -1px 0 rgba(0,0,0,.12);
+  transition:transform var(--dur-fast) var(--ease-standard),filter var(--dur-fast) var(--ease-standard),box-shadow var(--dur-base) var(--ease-standard)}
+.btn-primary::after{content:"";position:absolute;top:0;left:-130%;width:55%;height:100%;pointer-events:none;
+  background:linear-gradient(100deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-18deg);
+  transition:left var(--dur-slow) var(--ease-standard)}
+.btn-primary:hover{filter:brightness(1.04);transform:translateY(-1px);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.45), 0 6px 18px rgba(227,179,65,.30)}
+.btn-primary:hover::after{left:150%}
+.btn-primary:active{transform:translateY(0) scale(.985);filter:brightness(.99);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.25), 0 2px 8px rgba(227,179,65,.22)}
+@media (prefers-reduced-motion: reduce){.btn-primary::after{display:none}}
+.btn-verified{background:var(--green);color:var(--green-ink)}
+.btn-neutral{background:var(--fill-3);color:var(--text)}
+.btn-ghost{background:transparent;color:var(--text-2)}
+.btn-ghost:hover{background:var(--fill-3);filter:none;color:var(--text)}
+.btn-sm{padding:6px 12px;font-size:var(--fs-sm)}
+.spinner{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin var(--dur-spin) var(--ease-linear) infinite}
+
+/* ---- Inputs, segmented, tabs, switch: solid fills, no borders ---- */
+.ctl-stack{display:grid;gap:16px;max-width:460px}
+.input{border:0;border-radius:var(--r-ctl);padding:10px 12px;font:inherit;background:var(--fill-2);color:var(--text);
+  transition:background-color var(--dur-fast) var(--ease-standard)}
+.input::placeholder{color:var(--text-3)}
+.input:focus{outline:2px solid var(--gold);outline-offset:0}
+.seg{display:inline-flex;flex-wrap:wrap;gap:4px;background:var(--fill-1);border-radius:var(--r-ctl);padding:4px}
+.seg button{border:0;background:transparent;border-radius:4px;padding:6px 12px;font:inherit;font-size:var(--fs-sm);color:var(--text-2);cursor:pointer;
+  transition:background-color var(--dur-fast) var(--ease-standard),color var(--dur-fast) var(--ease-standard)}
+.seg button[aria-pressed="true"]{background:var(--fill-3);color:var(--text)}
+.seg .count{color:var(--text-3);margin-left:5px}
+.tabs{display:flex;flex-wrap:wrap;gap:26px;font-size:var(--fs-md);border-bottom:1px solid var(--line)}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:0 0 12px;margin-bottom:-1px;color:var(--text-3);cursor:pointer;font:inherit;
+  transition:color var(--dur-base) var(--ease-standard),border-color var(--dur-base) var(--ease-standard)}
+.tabs button[aria-selected="true"]{color:var(--text);border-bottom-color:var(--gold)}
+.switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:var(--fs-sm);color:var(--text-2)}
+.switch input{appearance:none;width:38px;height:22px;border-radius:99px;background:var(--fill-3);position:relative;cursor:pointer;margin:0;flex:none;
+  transition:background-color var(--dur-fast) var(--ease-standard)}
+.switch input::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:transform var(--dur-fast) var(--ease-standard)}
+.switch input:checked{background:var(--green)}
+.switch input:checked::after{transform:translateX(16px)}
+
+/* ---- Status tags: solid fills only, for STATUS (severity, verification outcome) ---- */
+.tags{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.tag{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-tag);padding:3px 9px;font-size:var(--fs-xs);font-weight:600;white-space:nowrap;line-height:1.6}
+.tag.sev-critical{background:var(--sev-critical);color:#2a0b08}
+.tag.sev-high{background:var(--sev-high);color:#2a1705}
+.tag.sev-medium{background:var(--sev-medium);color:#271d03}
+.tag.sev-low{background:var(--sev-low);color:var(--green-ink)}
+.tag.sev-unknown{background:var(--sev-unknown);color:#0e1512}
+.tag.o-exposed{background:var(--sev-critical);color:#2a0b08}
+.tag.o-found{background:var(--sev-high);color:#2a1705}
+.tag.o-clear{background:var(--green);color:var(--green-ink)}
+.tag.o-gray{background:var(--sev-unknown);color:#0e1512}
+
+/* ---- Dot label: for metadata and intermediate claims (match status, confidence) ---- */
+/* No fills, no borders. The dot carries the color, the text stays legible. */
+.dlabel{display:inline-flex;align-items:center;gap:8px;font-size:var(--fs-sm);color:var(--text-2);white-space:nowrap}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.dot.red{background:var(--sev-critical)} .dot.gold{background:var(--gold)} .dot.green{background:var(--green)} .dot.gray{background:var(--text-3)}
+/* confirmed_in_runtime is the one exception: strongest confidence gets a solid green chip */
+.chip-strong{display:inline-flex;align-items:center;gap:6px;border-radius:var(--r-tag);padding:3px 9px;font-size:var(--fs-xs);font-weight:600;background:var(--green);color:var(--green-ink)}
+
+/* ---- Inventory list: a clean list, rows separated by rules, no cards ---- */
+.list{display:grid}
+.litem{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;padding:16px 0;align-items:baseline}
+.litem + .litem{border-top:1px solid var(--line)}
+.litem .name{font-weight:600;font-size:var(--fs-md)}
+.litem .ver{font-family:var(--mono);font-size:var(--fs-sm);color:var(--gold);margin-left:10px}
+.litem .role{color:var(--text-3);font-size:var(--fs-xs);margin-top:2px}
+.litem .ev{grid-column:1/-1;color:var(--text-2);font-size:var(--fs-sm);margin-top:6px}
+.litem .meta{justify-self:end;text-align:right;display:grid;gap:4px;font-size:var(--fs-xs);color:var(--text-3)}
+
+/* ---- Findings: grid "table", horizontal row rules only, no vertical lines, no outer box ---- */
+.ftable{display:grid;grid-template-columns:40px minmax(0,1.6fr) 110px 1fr 1fr 64px}
+.ftable .hd,.frow>*{padding:12px 14px}
+.ftable .hd{font-size:var(--fs-xs);text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);font-weight:600;border-bottom:1px solid var(--line)}
+.ftable .hd.num,.frow .num{text-align:right}
+.frow{display:contents;cursor:pointer}
+.frow>*{border-bottom:1px solid var(--line);transition:background-color var(--dur-fast) var(--ease-standard);align-self:center}
+.frow:hover>*{background:var(--fill-1)}
+.frow.open>*{background:var(--fill-1);border-bottom-color:transparent}
+.frow .rank{color:var(--text-3)}
+.frow .pkg{font-family:var(--mono);font-size:var(--fs-xs)}
+.chev{display:inline-block;width:7px;height:7px;border-right:1.6px solid var(--text-3);border-bottom:1.6px solid var(--text-3);transform:rotate(-45deg);margin-right:6px;
+  transition:transform var(--dur-moderate) var(--ease-standard)}
+.frow.open .chev{transform:rotate(45deg)}
+/* expanded detail: grid-rows 0fr -> 1fr, the cheap expand */
+.fdetail{grid-column:1/-1;display:grid;grid-template-rows:0fr;background:var(--fill-1);
+  transition:grid-template-rows var(--dur-moderate) var(--ease-standard)}
+.frow.open + .fdetail{grid-template-rows:1fr;border-bottom:1px solid var(--line)}
+.fdetail>.inner{overflow:hidden;min-height:0}
+.detail-pad{padding:4px 14px 22px}
+
+/* ---- Evidence chain: the credibility component. Rail of nodes, no boxes. ---- */
+.chain{display:grid;gap:0;max-width:760px}
+.cstep{display:grid;grid-template-columns:22px minmax(0,1fr);gap:14px}
+.crail{display:grid;justify-items:center;gap:0}
+.cnode{width:11px;height:11px;border-radius:50%;margin-top:5px}
+.cnode.repo{background:var(--green)} .cnode.advisory{background:var(--gold)} .cnode.verify{background:var(--sev-critical)}
+.cline{width:2px;flex:1;background:var(--line);min-height:14px}
+.cbody{padding-bottom:18px;display:grid;gap:7px}
+.cbody h4{font-size:var(--fs-sm)}
+.cbody .meta{font-size:var(--fs-xs);color:var(--text-3);font-family:var(--mono);overflow-wrap:anywhere}
+.quote{padding:2px 0 2px 12px;border-left:2px solid var(--gold);font-size:var(--fs-md);color:var(--text)}
+.quote mark{background:var(--gold-wash);color:var(--gold-hi);padding:0 3px}
+.codeline{font-family:var(--mono);font-size:var(--fs-xs);background:var(--fill-2);border-radius:var(--r-0);padding:10px 12px;color:var(--text-2);overflow-x:auto}
+.codeline b{color:var(--sev-high);font-weight:500}
+.fix{font-size:var(--fs-sm);color:var(--green-hi);padding:2px 0 2px 12px;border-left:2px solid var(--green)}
+
+/* ---- Activity feed: list on the page, row rules, stage color dot ---- */
+.feed{display:grid}
+.fitem{display:grid;grid-template-columns:80px 14px minmax(0,1fr);gap:12px;align-items:baseline;padding:11px 0}
+.fitem + .fitem{border-top:1px solid var(--line)}
+.fitem .ts{font-family:var(--mono);font-size:var(--fs-xs);color:var(--text-3)}
+.fitem .st{width:8px;height:8px;border-radius:50%;align-self:center}
+.st.discovery{background:var(--gold)} .st.intel{background:var(--green)} .st.verification{background:var(--sev-critical)}
+.st.monitor{background:var(--text-3)} .st.report{background:var(--green-hi)}
+.fitem .msg{color:var(--text-2);font-size:var(--fs-sm)}
+.fitem .msg b{color:var(--text);font-weight:600}
+.fitem .stg{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-3);margin-left:8px}
+
+/* ---- Motion utilities (reusable; documented in the Motion section) ---- */
+.u-reveal{animation:reveal var(--dur-moderate) var(--ease-enter) both}
+@keyframes reveal{from{opacity:0;transform:translateY(var(--travel))}to{opacity:1;transform:none}}
+.u-flash{animation:flash var(--dur-highlight) var(--ease-standard) both}
+@keyframes flash{from{background-color:var(--gold-wash)}to{background-color:transparent}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.u-skeleton{height:14px;border-radius:var(--r-0);background:linear-gradient(90deg,var(--fill-1),var(--fill-3),var(--fill-1));background-size:200% 100%;animation:shimmer var(--dur-loop) var(--ease-linear) infinite}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.stagger > *{animation:reveal var(--dur-moderate) var(--ease-enter) both}
+.stagger > *:nth-child(2){animation-delay:var(--stagger)}
+.stagger > *:nth-child(3){animation-delay:calc(var(--stagger)*2)}
+.stagger > *:nth-child(4){animation-delay:calc(var(--stagger)*3)}
+.stagger > *:nth-child(5){animation-delay:calc(var(--stagger)*4)}
+
+/* ---- small helpers ---- */
+.demo-strip{padding:16px 0;display:grid;gap:4px}
+.demo-strip + .demo-strip{border-top:1px solid var(--line)}
+.motion-grid{display:grid;grid-template-columns:140px minmax(0,1fr);gap:0}
+.motion-grid dt{padding:10px 0;font-family:var(--mono);font-size:var(--fs-xs);color:var(--gold)}
+.motion-grid dd{padding:10px 0;margin:0;font-size:var(--fs-sm);color:var(--text-2)}
+.motion-grid dt,.motion-grid dd{border-top:1px solid var(--line)}
+.principles{display:grid;gap:16px;padding:0;margin:0}
+.principles li{list-style:none;display:grid;grid-template-columns:28px minmax(0,1fr);gap:12px;font-size:var(--fs-sm);color:var(--text-2)}
+.principles .n{font-family:var(--mono);color:var(--gold);font-weight:500}
+.principles b{color:var(--text);font-weight:600}
+footer{padding:48px 0 80px;color:var(--text-3);font-size:var(--fs-sm)}
+</style>
+</head>
+<body>
+
+<!-- HERO -->
+<header class="hero"><div class="wrap">
+  <div class="brandline"><div class="mark" aria-hidden="true"></div><div class="wordmark">Stack<em>watch</em></div></div>
+  <h1>Design and motion system</h1>
+  <p>The flat, dark system the Stackwatch demo is built from. Gold for action, green for verified, red for exposed. Structure comes from layout and full-width rules, never from boxing things in.</p>
+  <div class="legend">
+    <span class="dlabel"><span class="dot gold"></span>Gold = action</span>
+    <span class="dlabel"><span class="dot green"></span>Green = verified</span>
+    <span class="dlabel"><span class="dot red"></span>Red = exposed</span>
+  </div>
+</div></header>
+
+<div class="rule"></div>
+
+<!-- COLOR -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Color</h2>
+    <p>Two accents carry the product: gold for action and anything the agent proposes, green for anything verified. The severity spectrum is a separate data encoding, used only inside solid tags, so brand color never competes with risk color.</p></div>
+
+  <div class="group"><div class="sub">Brand</div>
+    <div class="swrow">
+      <div class="swatch"><div class="chip" style="background:var(--gold)"></div><b>Gold</b><code>#e3b341</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--gold-hi)"></div><b>Gold high</b><code>#f2cb66</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--green)"></div><b>Green</b><code>#3fb27f</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--green-hi)"></div><b>Green high</b><code>#5ccf98</code></div>
+    </div>
+  </div>
+
+  <div class="group"><div class="sub">Surfaces and text</div>
+    <div class="swrow">
+      <div class="swatch"><div class="chip" style="background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)"></div><b>Background</b><code>#000000</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--fill-1)"></div><b>Fill 1</b><code>#0e0e0e</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--fill-2)"></div><b>Fill 2</b><code>#181818</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--fill-3)"></div><b>Fill 3</b><code>#242424</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--text)"></div><b>Text</b><code>#ffffff</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--text-2)"></div><b>Text 2</b><code>#a6a6a6</code></div>
+    </div>
+  </div>
+
+  <div class="group"><div class="sub">Severity spectrum</div>
+    <div class="swrow">
+      <div class="swatch"><div class="chip" style="background:var(--sev-critical)"></div><b>Critical</b><code>#e5534b</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--sev-high)"></div><b>High</b><code>#e08b3a</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--sev-medium)"></div><b>Medium</b><code>#e3b341</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--sev-low)"></div><b>Low</b><code>#3fb27f</code></div>
+      <div class="swatch"><div class="chip" style="background:var(--sev-unknown)"></div><b>Unknown</b><code>#7d8a82</code></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- TYPE -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Typography</h2>
+    <p>One typeface, Inter Tight. Hierarchy is size, weight, and color, nothing else. JetBrains Mono for versions, identifiers, timestamps, and code evidence, so machine values read as machine values.</p></div>
+  <div class="list">
+    <div class="specimen"><div class="d">2xl / 700 / display</div><div class="t2xl">What are we running?</div></div>
+    <div class="specimen"><div class="d">xl / 600 / section heading</div><div class="txl">Findings, ranked by real risk</div></div>
+    <div class="specimen"><div class="d">lg / 600 / lead</div><div class="tlg">An affected version is a reason to investigate, not proof.</div></div>
+    <div class="specimen"><div class="d">md / 400 / body</div><div class="tmd">Verification confirms a component is present and reachable, not that it was exploited.</div></div>
+    <div class="specimen"><div class="d">sm / 400 / secondary</div><div class="tsm">Observed 2026-10-09 at 18:30 UTC from package-lock.json</div></div>
+    <div class="specimen"><div class="d">mono / identifiers</div><div class="tmd mono" style="color:var(--gold-hi)">GHSA-29mw-wpgm-hmr9 · express@4.17.1</div></div>
+  </div>
+</div></section>
+
+<!-- KPIS -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Overview numbers</h2>
+    <p>The top of the dashboard. No cards. Numbers sit on the page, separated by thin rules, colored only when the number carries a verdict.</p></div>
+  <div class="kpis">
+    <div class="kpi"><span class="k">Technologies</span><span class="v">148</span><span class="d">12 direct, 136 transitive</span></div>
+    <div class="kpi"><span class="k">Confirmed affected</span><span class="v red">7</span><span class="d">matched installed versions</span></div>
+    <div class="kpi"><span class="k">Exposure verified</span><span class="v gold">2</span><span class="d">checked on the demo target</span></div>
+    <div class="kpi"><span class="k">Advisory corpus</span><span class="v green">41,980</span><span class="d">ClickHouse, 38 ms p95</span></div>
+  </div>
+</div></section>
+
+<!-- CONTROLS -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Actions and controls</h2>
+    <p>Gold is the one primary action per view, and the only gradient in the system. Green confirms. Everything else is a flat fill. Controls are the only things that round their corners.</p></div>
+  <div class="cols-2">
+    <div class="group"><div class="sub">Buttons</div>
+      <div class="btnrow" style="margin-bottom:14px">
+        <button class="btn btn-primary">Run scan</button>
+        <button class="btn btn-verified">Confirm scope</button>
+        <button class="btn btn-neutral">Export</button>
+        <button class="btn btn-ghost">Cancel</button>
+      </div>
+      <div class="btnrow">
+        <button class="btn btn-primary btn-sm" id="busyBtn"><span class="spinner" id="busySpin" style="display:none"></span><span id="busyTxt">Replay advisory</span></button>
+        <button class="btn btn-ghost btn-sm" disabled>Verify (not authorized)</button>
+      </div>
+    </div>
+    <div class="group"><div class="sub">Inputs and toggles</div>
+      <div class="ctl-stack">
+        <input class="input" placeholder="Company domain, e.g. elevenlabs.io" />
+        <div class="seg">
+          <button aria-pressed="true">All <span class="count">14</span></button>
+          <button aria-pressed="false">Direct <span class="count">6</span></button>
+          <button aria-pressed="false">Verified <span class="count">2</span></button>
+        </div>
+        <div class="tabs" role="tablist">
+          <button role="tab" aria-selected="true">Inventory</button>
+          <button role="tab" aria-selected="false">Findings</button>
+          <button role="tab" aria-selected="false">Activity</button>
+          <button role="tab" aria-selected="false">Changes</button>
+        </div>
+        <label class="switch"><input type="checkbox" checked /> Continuous monitoring</label>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- STATUS LANGUAGE -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Status language</h2>
+    <p>The product's honesty lives here. Solid tags are reserved for proven status: severity, and verification outcome (tone-mapped, red when exposed, green when clear). Weaker claims, match status and confidence, are dot labels, because they describe data and provenance, not a proven condition.</p></div>
+
+  <div class="cols-2">
+    <div class="group"><div class="sub">Severity (solid tag)</div>
+      <div class="tags"><span class="tag sev-critical">Critical</span><span class="tag sev-high">High</span><span class="tag sev-medium">Medium</span><span class="tag sev-low">Low</span><span class="tag sev-unknown">Unknown</span></div>
+    </div>
+    <div class="group"><div class="sub">Verification outcome (solid tag)</div>
+      <div class="tags"><span class="tag o-exposed">exposure_verified</span><span class="tag o-found">affected_component_found</span><span class="tag o-clear">not_reproduced</span><span class="tag o-gray">inconclusive</span><span class="tag o-gray">not_run</span></div>
+    </div>
+    <div class="group"><div class="sub">Match status (dot label)</div>
+      <div class="tags">
+        <span class="dlabel"><span class="dot red"></span>confirmed_affected_version</span>
+        <span class="dlabel"><span class="dot gold"></span>possible_match</span>
+        <span class="dlabel"><span class="dot green"></span>not_affected_version</span>
+        <span class="dlabel"><span class="dot gray"></span>needs_review</span>
+      </div>
+    </div>
+    <div class="group"><div class="sub">Confidence (dot label, strongest is a chip)</div>
+      <div class="tags">
+        <span class="dlabel"><span class="dot gold"></span>inferred</span>
+        <span class="dlabel"><span class="dot green"></span>confirmed_in_repo</span>
+        <span class="chip-strong">confirmed_in_runtime</span>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- INVENTORY -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Inventory list</h2>
+    <p>One row per technology, separated by rules. No cards. The version is mono and gold because it is the fact everything downstream depends on, and the confidence label never hides behind the name.</p></div>
+  <div class="list">
+    <div class="litem">
+      <div><span class="name">express</span><span class="ver">4.17.1</span><div class="role">web framework · direct</div>
+        <div class="ev">"express": { "version": "4.17.1" } in package-lock.json</div></div>
+      <div class="meta"><span class="dlabel"><span class="dot green"></span>confirmed_in_repo</span><span>18:30 UTC</span></div>
+    </div>
+    <div class="litem">
+      <div><span class="name">Next.js</span><span class="ver">version unknown</span><div class="role">framework · observed</div>
+        <div class="ev">__NEXT_DATA__ marker on the homepage. A guess until a repo confirms it.</div></div>
+      <div class="meta"><span class="dlabel"><span class="dot gold"></span>inferred</span><span>public page</span></div>
+    </div>
+    <div class="litem">
+      <div><span class="name">jsonwebtoken</span><span class="ver">8.5.1</span><div class="role">auth · transitive</div>
+        <div class="ev">Present in the deployed demo and reached by the login route.</div></div>
+      <div class="meta"><span class="chip-strong">confirmed_in_runtime</span><span>checked 18:32 UTC</span></div>
+    </div>
+  </div>
+</div></section>
+
+<!-- FINDINGS -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Findings and the evidence chain</h2>
+    <p>Ranked by real risk: severity times verification. Rows are separated by rules, not boxed. A row opens downward into the evidence chain, the component that makes the product credible: stack item, to sourced advisory, to recorded check, each linking to the original. Click a row.</p></div>
+
+  <div class="ftable" id="ftable">
+    <div class="hd">#</div><div class="hd">Component</div><div class="hd">Severity</div><div class="hd">Match</div><div class="hd">Verification</div><div class="hd num">Risk</div>
+
+    <div class="frow open" data-row>
+      <div class="rank"><span class="chev"></span>1</div>
+      <div class="pkg">jsonwebtoken@8.5.1</div>
+      <div><span class="tag sev-critical">Critical</span></div>
+      <div><span class="dlabel"><span class="dot red"></span>affected</span></div>
+      <div><span class="tag o-exposed">exposure_verified</span></div>
+      <div class="num">12</div>
+    </div>
+    <div class="fdetail"><div class="inner"><div class="detail-pad">
+      <div class="chain">
+        <div class="cstep"><div class="crail"><div class="cnode repo"></div><div class="cline"></div></div>
+          <div class="cbody"><h4>Stack item: jsonwebtoken 8.5.1</h4>
+            <div class="quote"><mark>"jsonwebtoken"</mark>: { "version": "<mark>8.5.1</mark>" }</div>
+            <div class="meta">confirmed_in_repo · package-lock.json @ a1b2c3d · view source</div></div></div>
+        <div class="cstep"><div class="crail"><div class="cnode advisory"></div><div class="cline"></div></div>
+          <div class="cbody"><h4>Advisory: GHSA-29mw-wpgm-hmr9</h4>
+            <div class="meta">affected &lt; 9.0.0 · fixed 9.0.0 · severity critical · GitHub Security Advisories</div>
+            <div class="tsm">8.5.1 is within the affected range. The match is deterministic from the advisory's own range data.</div></div></div>
+        <div class="cstep"><div class="crail"><div class="cnode verify"></div></div>
+          <div class="cbody"><h4>Verification: exposure_verified</h4>
+            <div class="codeline">routes/login.ts:42 &rarr; jwt.verify(token, secret, <b>{ }</b>)  // no algorithms pinned</div>
+            <div class="meta">semgrep rule ghsa-29mw-jwt-no-alg · 1 request · 0.4 s · authorized demo target</div>
+            <div class="fix">Upgrade jsonwebtoken from 8.5.1 to &gt;=9.0.0, which rejects unpinned algorithms by default.</div></div></div>
+      </div>
+    </div></div></div>
+
+    <div class="frow" data-row>
+      <div class="rank"><span class="chev"></span>2</div><div class="pkg">lodash@4.17.11</div>
+      <div><span class="tag sev-high">High</span></div>
+      <div><span class="dlabel"><span class="dot red"></span>affected</span></div>
+      <div><span class="tag o-found">affected_component_found</span></div><div class="num">6</div>
+    </div>
+    <div class="fdetail"><div class="inner"><div class="detail-pad">
+      <div class="tsm">Prototype pollution advisory matched on an installed version. The component is present but no vulnerable call site was found by the shipped rules, so exposure is unproven.</div>
+    </div></div></div>
+
+    <div class="frow" data-row>
+      <div class="rank"><span class="chev"></span>3</div><div class="pkg">marked@0.3.6</div>
+      <div><span class="tag sev-medium">Medium</span></div>
+      <div><span class="dlabel"><span class="dot gold"></span>possible</span></div>
+      <div><span class="tag o-gray">inconclusive</span></div><div class="num">2</div>
+    </div>
+    <div class="fdetail"><div class="inner"><div class="detail-pad">
+      <div class="tsm">Version could not be confirmed from the collected data, so this stays a possible match and is never dressed up as urgent.</div>
+    </div></div></div>
+
+    <div class="frow" data-row>
+      <div class="rank"><span class="chev"></span>4</div><div class="pkg">express@4.17.1</div>
+      <div><span class="tag sev-low">Low</span></div>
+      <div><span class="dlabel"><span class="dot green"></span>not_affected</span></div>
+      <div><span class="tag o-clear">not_reproduced</span></div><div class="num">0</div>
+    </div>
+    <div class="fdetail"><div class="inner"><div class="detail-pad">
+      <div class="tsm">The installed version sits outside the advisory's affected range. Kept visible as evidence, scored zero.</div>
+    </div></div></div>
+  </div>
+</div></section>
+
+<!-- FEED -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Live activity feed</h2>
+    <p>The autonomy story, visible. Each stage has a color dot. Monitor heartbeats appear even when nothing changed, so the agent is seen working. This plays during the recording.</p></div>
+  <div class="feed stagger">
+    <div class="fitem"><span class="ts">18:30:02</span><span class="st discovery"></span><span class="msg"><b>Discovery</b> read package-lock.json, 148 technologies<span class="stg">discovery</span></span></div>
+    <div class="fitem"><span class="ts">18:30:40</span><span class="st intel"></span><span class="msg"><b>Intelligence</b> matched 14 candidates: 7 confirmed, 7 possible<span class="stg">intel</span></span></div>
+    <div class="fitem"><span class="ts">18:31:18</span><span class="st verification"></span><span class="msg"><b>Verification</b> jsonwebtoken@8.5.1 exposure_verified via semgrep<span class="stg">verification</span></span></div>
+    <div class="fitem"><span class="ts">18:31:55</span><span class="st report"></span><span class="msg"><b>Report</b> published, 2 verified exposures ranked<span class="stg">report</span></span></div>
+    <div class="fitem"><span class="ts">18:32:25</span><span class="st monitor"></span><span class="msg"><b>Monitor</b> new advisory GHSA-abcd replayed, scheduling recheck<span class="stg">monitor</span></span></div>
+  </div>
+</div></section>
+
+<!-- MOTION -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Motion</h2>
+    <p>Every token and every reusable sequence, live. Components reference a utility class or a token, never a raw duration. Motion confirms, locates, or signals work, and never fakes it.</p></div>
+
+  <div class="cols-2">
+    <div class="group"><div class="sub">Tokens</div>
+      <dl class="motion-grid">
+        <dt>--dur-fast</dt><dd>120ms · hover, press, focus, switch</dd>
+        <dt>--dur-base</dt><dd>200ms · tag swap, tab switch</dd>
+        <dt>--dur-moderate</dt><dd>280ms · expand, collapse, dropdown</dd>
+        <dt>--dur-highlight</dt><dd>1200ms · changed-row flash</dd>
+        <dt>--ease-standard</dt><dd>cubic-bezier(.2,0,0,1) · default</dd>
+        <dt>--ease-enter</dt><dd>cubic-bezier(0,0,0,1) · arriving</dd>
+        <dt>--travel</dt><dd>6px · max slide distance</dd>
+        <dt>--stagger</dt><dd>40ms · between siblings</dd>
+      </dl>
+    </div>
+    <div class="group"><div class="sub">Sequences (click to run)</div>
+      <div class="demo-strip"><span class="tsm"><code>.u-reveal</code> enter, decelerate into place</span>
+        <div><button class="btn btn-neutral btn-sm" data-play="reveal">Play reveal</button> <span id="revealTarget" class="tmd" style="margin-left:10px"></span></div>
+      </div>
+      <div class="demo-strip"><span class="tsm"><code>.u-flash</code> a changed row fades from gold-wash</span>
+        <div class="litem" id="flashTarget" style="border-top:0;padding:10px 12px"><div><span class="name">New finding</span><span class="ver">redis@4.6.0</span></div><div class="meta"><button class="btn btn-ghost btn-sm" data-play="flash">Flash</button></div></div>
+      </div>
+      <div class="demo-strip"><span class="tsm"><code>spin</code> inline button spinner, work under 2s</span>
+        <div><span class="spinner" style="color:var(--gold)"></span></div>
+      </div>
+      <div class="demo-strip"><span class="tsm"><code>.u-skeleton</code> content over ~300ms away</span>
+        <div style="display:grid;gap:8px;max-width:320px;margin-top:4px"><div class="u-skeleton"></div><div class="u-skeleton" style="width:70%"></div></div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- PRINCIPLES -->
+<section class="section"><div class="wrap">
+  <div class="sec-h"><h2>Principles</h2></div>
+  <div class="cols-2">
+    <ul class="principles">
+      <li><span class="n">1</span><span><b>Flat, not boxed.</b> Differentiate with a solid fill and spacing. Reach for a full-width rule before you reach for a container, and never draw a border around content.</span></li>
+      <li><span class="n">2</span><span><b>Evidence or it did not happen.</b> No finding renders without a source link. The evidence chain is the hero, not an afterthought.</span></li>
+      <li><span class="n">3</span><span><b>Never overstate.</b> Solid tags for proven status only. Weaker claims are dot labels. Color follows the claim's strength.</span></li>
+    </ul>
+    <ul class="principles">
+      <li><span class="n">4</span><span><b>One gold action per view.</b> The single gradient in the system lives on that button and nowhere else.</span></li>
+      <li><span class="n">5</span><span><b>Machine values look like machine values.</b> Versions, IDs, and timestamps are mono. Prose is Inter Tight.</span></li>
+      <li><span class="n">6</span><span><b>Motion is functional and dark-recording friendly.</b> A row opens, a new finding flashes once. Nothing animates to look busy.</span></li>
+    </ul>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Stackwatch design and motion system · flat dark theme, gold and green · ported from nationgraph "Signal to Draft". Tokens live under <code>:root</code> at the top of this file.
+</div></footer>
+
+<script>
+// Reusable interactions. The visual spec is the CSS above; this only wires the demos.
+document.querySelectorAll('[data-row]').forEach(function(row){
+  row.addEventListener('click', function(){ row.classList.toggle('open'); });
+});
+document.querySelectorAll('[data-play]').forEach(function(btn){
+  btn.addEventListener('click', function(e){
+    e.stopPropagation();
+    var kind = btn.getAttribute('data-play');
+    if(kind === 'reveal'){
+      var t = document.getElementById('revealTarget');
+      t.textContent = 'exposure_verified';
+      t.classList.remove('u-reveal'); void t.offsetWidth; t.classList.add('u-reveal');
+    }
+    if(kind === 'flash'){
+      var f = document.getElementById('flashTarget');
+      f.classList.remove('u-flash'); void f.offsetWidth; f.classList.add('u-flash');
+    }
+  });
+});
+// Button busy-state demo: spinner for work under 2s, then resolve.
+var bb = document.getElementById('busyBtn');
+if(bb){ bb.addEventListener('click', function(){
+  var s = document.getElementById('busySpin'), t = document.getElementById('busyTxt');
+  s.style.display='inline-block'; t.textContent='Replaying';
+  setTimeout(function(){ s.style.display='none'; t.textContent='Replayed'; setTimeout(function(){ t.textContent='Replay advisory'; },1200); },1400);
+}); }
+</script>
+</body>
+</html>
