@@ -4,7 +4,12 @@ from app.verify.runtime import check_runtime
 
 from app.schema import Target, StackItem, Advisory, Candidate, Verification, Evidence, Emit
 from app.ids import verification_id
-from app.config import is_target_authorized, is_repo_authorized, get_allowed_hosts
+from app.config import (
+    get_allowed_hosts,
+    is_repo_authorized,
+    is_target_authorized,
+    resolve_repo_path,
+)
 
 
 def verify(
@@ -34,11 +39,11 @@ def verify(
     # Load rule registry
     registry = load_registry(emit)
 
-    # Get repo path
-    repo_path = target.repo
-    if not repo_path:
+    if not target.repo:
         emit("verification", "warn", "No repo path for verification", None)
         return _all_inconclusive(candidates, run_id, target, "no repo path", emit)
+    # Same resolution the authorization gate used, so the checked path is the scanned path.
+    repo_path = str(resolve_repo_path(target.repo))
 
     # V1: Dependency presence checks
     emit("verification", "info", "Running dependency presence checks", None)

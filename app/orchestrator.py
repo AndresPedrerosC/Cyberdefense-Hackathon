@@ -146,6 +146,9 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         store.insert_candidates(candidates)
 
         _update_run_state(run, "reporting")
+        await asyncio.to_thread(
+            _run_deep_scans, target, run_id, stack_items, candidates, emit
+        )
         _detect_changes(target.target_id, run_id, emit)
 
         _update_run_state(run, "complete")
@@ -172,6 +175,52 @@ def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:
     if kb:
         kb.status = status
         save(kb, emit)
+
+
+def _run_deep_scans(target, run_id, stack_items, candidates, emit) -> None:
+    """Run the deep-scan pillar. Each scanner is isolated: a failure in one emits a warning
+    and never fails the run or blocks the others."""
+    from app import config
+    from app import scanner
+    from app.scanner import endpoint_enumerator, threat_patterns, vulnerability_scanner
+
+    vuln_findings: list[dict] = []
+    endpoints: list[dict] = []
+
+    try:
+        vuln_findings = vulnerability_scanner.scan_dependencies(stack_items, run_id, emit)
+    except Exception as e:
+        emit("verification", "warn", f"Dependency scan failed: {e}", None)
+
+    if target.kind in ("connected_repo", "owned_deployment") and target.repo:
+        try:
+            if config.is_repo_path_allowed(target.repo):
+                repo_path = config.resolve_repo_path(target.repo)
+                vuln_findings += vulnerability_scanner.scan_secrets_exposure(repo_path, emit)
+                vuln_findings += vulnerability_scanner.scan_misconfigurations(repo_path, emit)
+            else:
+                emit("verification", "warn", "Repo outside allowed roots; skipping repo scan", None)
+        except Exception as e:
+            emit("verification", "warn", f"Repo scan failed: {e}", None)
+
+    if target.kind in ("public", "owned_deployment"):
+        try:
+            endpoints = endpoint_enumerator.enumerate_endpoints(target, run_id, emit)
+            endpoints = endpoint_enumerator.fingerprint_endpoints(endpoints, target, emit)
+        except Exception as e:
+            emit("discovery", "warn", f"Endpoint enumeration failed: {e}", None)
+
+    threats: list[dict] = []
+    try:
+        threats = threat_patterns.surface_threats(
+            candidates, stack_items, endpoints, vuln_findings, emit
+        )
+    except Exception as e:
+        emit("report", "warn", f"Threat surfacing failed: {e}", None)
+
+    scanner.store_scan_results(run_id, "vulnscan", vuln_findings)
+    scanner.store_scan_results(run_id, "endpoints", endpoints)
+    scanner.store_scan_results(run_id, "threats", threats)
 
 
 def _detect_changes(target_id: str, current_run_id: str, emit: Emit) -> None:

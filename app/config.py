@@ -38,16 +38,29 @@ def is_target_authorized(target_id: str, kind: str) -> tuple[bool, str]:
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
+def resolve_repo_path(repo: str) -> Path:
+    """Relative repo paths are anchored at PROJECT_ROOT, never the process cwd."""
+    p = Path(repo)
+    return (p if p.is_absolute() else PROJECT_ROOT / p).resolve()
+
+def is_repo_path_allowed(repo: str) -> bool:
+    """Repo must resolve (symlinks followed) inside one of ALLOWED_REPO_ROOTS."""
+    try:
+        actual = resolve_repo_path(repo)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return any(actual.is_relative_to(root) for root in ALLOWED_REPO_ROOTS)
+
 def is_repo_authorized(target_id: str, repo: str | None) -> bool:
     """A configured repo path pins the target; any other path is refused."""
     entry = load_demo_config().get("authorized_targets", {}).get(target_id, {})
     configured = entry.get("repo")
     if not configured or not repo:
         return True
-    expected = (PROJECT_ROOT / configured).resolve()
-    actual = Path(repo)
-    actual = (actual if actual.is_absolute() else PROJECT_ROOT / actual).resolve()
-    return actual == expected
+    try:
+        return resolve_repo_path(repo) == resolve_repo_path(configured)
+    except (OSError, RuntimeError, ValueError):
+        return False
 
 def find_authorized_target_id(kind: str, repo: str | None) -> str | None:
     """Return the pre-authorized target id whose configured repo is exactly this path."""
@@ -80,3 +93,6 @@ CLICKHOUSE_DATABASE = get_env("CLICKHOUSE_DATABASE", "cyberdefense")
 POLL_INTERVAL_SECONDS = get_env_int("POLL_INTERVAL_SECONDS", 300)
 DEMO_MODE = get_env_bool("DEMO_MODE")
 CACHE_ONLY = get_env_bool("CACHE_ONLY")
+ALLOWED_REPO_ROOTS = [
+    resolve_repo_path(p) for p in (get_env("ALLOWED_REPO_ROOTS") or "demo").split(os.pathsep) if p
+]
