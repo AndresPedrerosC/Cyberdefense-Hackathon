@@ -194,6 +194,8 @@ def _parse_advisory(data: dict, emit: Emit) -> Advisory | None:
             severity=severity,
             cvss_vector=cvss_vector,
             summary=data.get("summary", ""),
+            details=(data.get("details") or "")[:8000] or None,
+            cwe_ids=[str(c) for c in (data.get("database_specific") or {}).get("cwe_ids") or []],
             published=published,
             modified=modified,
             withdrawn=withdrawn,

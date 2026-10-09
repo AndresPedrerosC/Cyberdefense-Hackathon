@@ -52,6 +52,9 @@ class StackItem(BaseModel):
     status: StackItemStatus = "inferred"
     source_url: str | None = None
     evidence: str | None = None
+    # Lockfile edges: packages that declare this one as a dependency. Not persisted.
+    parents: list[str] = Field(default_factory=list)
+    dev: bool = False  # only reachable through devDependencies
 
 
 class AffectedRange(BaseModel):
@@ -71,6 +74,8 @@ class Advisory(BaseModel):
     severity: Severity = "unknown"
     cvss_vector: str | None = None
     summary: str | None = None
+    details: str | None = None  # full advisory text; feeds impact and symbol extraction
+    cwe_ids: list[str] = Field(default_factory=list)
     published: datetime | None = None
     modified: datetime | None = None
     withdrawn: datetime | None = None
@@ -114,6 +119,45 @@ class Verification(BaseModel):
     checks_performed: list[str] = Field(default_factory=list)
     suggested_fix: str | None = None
     target: str | None = None  # connected-repo or owned-authorized
+
+
+ReachTier = Literal["exposed", "called", "imported", "installed"]
+FindingKind = Literal["vulnerable-dependency", "exposed-secret", "misconfig"]
+
+
+class PathStep(BaseModel):
+    """One hop of the evidence path behind a finding (endpoint, route, file, package...)."""
+
+    node_id: str
+    kind: str
+    label: str
+    detail: str = ""
+    source_url: str | None = None
+
+
+class Finding(BaseModel):
+    """A correlated finding: what an attacker gets, how it is reached, and why that severity."""
+
+    id: str
+    run_id: str
+    kind: FindingKind
+    title: str
+    attacker_gets: str
+    how_reachable: str
+    impact: str
+    reach: ReachTier
+    auth_required: bool | None = None
+    via: str | None = None  # parent package when the vulnerable one is transitive
+    symbol: str | None = None  # vulnerable function confirmed in use, when known
+    path: list[PathStep] = Field(default_factory=list)
+    severity: Severity
+    severity_reasons: list[str] = Field(default_factory=list)
+    cvss_severity: Severity = "unknown"
+    advisory_ids: list[str] = Field(default_factory=list)
+    package: str | None = None
+    version: str | None = None
+    fix: str | None = None
+    narrated_by: Literal["template", "model"] = "template"
 
 
 class Event(BaseModel):
