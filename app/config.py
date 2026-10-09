@@ -65,6 +65,13 @@ def get_allowed_hosts(target_id: str) -> list[str]:
 # Shortcuts
 OPENAI_API_KEY = get_env("OPENAI_API_KEY")
 OPENAI_MODEL = get_env("OPENAI_MODEL", "gpt-4o-mini")
+# Recon agent LLM: any OpenAI-compatible endpoint. Defaults to a local Ollama Ministral.
+LLM_BASE_URL = get_env("LLM_BASE_URL", "http://localhost:11434/v1")
+LLM_MODEL = get_env("LLM_MODEL", "ministral-3:8b-instruct-2512-q4_K_M")
+LLM_API_KEY = get_env("LLM_API_KEY", "ollama")  # Ollama ignores it; the SDK requires one
+LLM_ENABLED = get_env_bool("LLM_ENABLED", True)
+LLM_MAX_STEPS = get_env_int("LLM_MAX_STEPS", 10)
+NVD_API_KEY = get_env("NVD_API_KEY")
 CLICKHOUSE_HOST = get_env("CLICKHOUSE_HOST", "localhost")
 CLICKHOUSE_PORT = get_env_int("CLICKHOUSE_PORT", 8123)
 CLICKHOUSE_USER = get_env("CLICKHOUSE_USER", "default")

@@ -376,3 +376,142 @@ a.src-val { color: var(--accent); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--fill-3); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* =====================================================================================
+   5. Knowledgebase reading view
+   A document, not a dashboard: one readable column, plain-language sentences first,
+   raw records second. Same tokens and rules as the console (flat, 1px rules, no boxes
+   except the fill-1 callouts). Every scraped value is untrusted and rendered escaped.
+   ===================================================================================== */
+.canvas.kb-open > :not(.kb) { display: none; }
+.kb { max-width: 880px; width: 100%; margin: 0 auto; padding: 4px 4px 48px; display: grid; gap: 30px; animation: reveal var(--dur-moderate) var(--ease-enter) both; }
+
+/* Tabs across the top of the document mirror the two nav items */
+.kb-tabs { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.kb-status { font-size: var(--fs-xs); color: var(--text-3); display: inline-flex; align-items: center; gap: 8px; }
+.kb-status .spinner { width: 11px; height: 11px; border-width: 1.5px; color: var(--verify); }
+
+/* Masthead: who this is, in one look */
+.kb-mast { display: grid; gap: 10px; }
+.kb-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); font-weight: 600; }
+.kb-title { font-size: var(--fs-2xl); line-height: 1.08; letter-spacing: -.03em; font-weight: 700; overflow-wrap: anywhere; }
+.kb-title .mono { font-size: .45em; letter-spacing: 0; color: var(--text-3); font-weight: 400; margin-left: 10px; vertical-align: middle; }
+.kb-lede { font-size: var(--fs-lg); line-height: 1.55; color: var(--text-2); max-width: 68ch; }
+.kb-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: var(--r-tag); background: var(--fill-2); color: var(--text-2); font-size: var(--fs-xs); }
+.kb-chip b { color: var(--text); font-weight: 500; }
+.tag.kev { background: var(--sev-critical); color: #2a0b08; }
+.tag.ransom { background: transparent; color: var(--sev-critical); box-shadow: inset 0 0 0 1px var(--sev-critical); }
+
+/* Agent callout: the model's own words, visibly attributed */
+.kb-agent { display: grid; gap: 8px; padding: 14px 16px; background: var(--fill-1); border-left: 2px solid var(--verify); }
+.kb-agent-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: var(--fs-xs); color: var(--text-3); }
+.kb-agent-h .dlabel { font-size: var(--fs-xs); color: var(--verify); }
+.kb-agent-h .dot { background: var(--verify); }
+.kb-agent p { font-size: var(--fs-md); line-height: 1.6; color: var(--text); white-space: pre-line; }
+.kb-agent.pending p { color: var(--text-3); }
+
+/* At a glance: label over value, thin vertical rules like the KPI strip */
+.kb-glance { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.kb-glance > div { padding: 12px 14px; display: grid; gap: 3px; align-content: start; min-width: 0; }
+.kb-glance > div:nth-child(4n+1) { padding-left: 0; }
+.kb-glance > div:not(:nth-child(4n+1)) { border-left: 1px solid var(--line); }
+.kb-glance > div:nth-child(n+5) { border-top: 1px solid var(--line); }
+.kb-glance .k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); font-weight: 600; }
+.kb-glance .v { font-size: var(--fs-md); color: var(--text); overflow-wrap: anywhere; }
+.kb-glance .v.muted { color: var(--text-3); }
+.kb-glance .s { font-size: var(--fs-xs); color: var(--text-3); }
+
+/* Sections: numbered heading, a prose paragraph, then the supporting records */
+.kb-sec { display: grid; gap: 12px; }
+.kb-sec-h { display: flex; align-items: baseline; gap: 10px; }
+.kb-sec-h .n { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); }
+.kb-sec-h h2 { font-size: var(--fs-lg); }
+.kb-sec-h .c { margin-left: auto; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); }
+.kb-prose { font-size: var(--fs-md); line-height: 1.65; color: var(--text-2); max-width: 70ch; }
+.kb-prose b { color: var(--text); font-weight: 500; }
+.kb-prose .warn { color: var(--sev-high); }
+.kb-prose .bad { color: var(--sev-critical); }
+.kb-prose .ok { color: var(--green-hi); }
+.kb-pending { font-size: var(--fs-sm); color: var(--text-3); display: flex; align-items: center; gap: 8px; }
+.kb-pending .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+.kb-empty { font-size: var(--fs-sm); color: var(--text-3); }
+
+/* Definition rows: label column + value column, ruled */
+.kb-dl { display: grid; grid-template-columns: 150px minmax(0,1fr); margin: 0; }
+.kb-dl dt, .kb-dl dd { margin: 0; padding: 8px 0; border-top: 1px solid var(--line); font-size: var(--fs-sm); }
+.kb-dl dt { color: var(--text-3); padding-right: 14px; }
+.kb-dl dd { color: var(--text); overflow-wrap: anywhere; min-width: 0; }
+.kb-dl dd .mono { font-size: var(--fs-xs); color: var(--text-2); }
+.kb-dl dd .sub { display: block; font-size: var(--fs-xs); color: var(--text-3); }
+
+/* Checklist: security headers and mail controls */
+.kb-checks { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px 20px; list-style: none; margin: 0; padding: 0; }
+.kb-checks li { display: flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); padding: 3px 0; }
+.kb-checks .mk { width: 14px; font-family: var(--mono); font-size: var(--fs-xs); text-align: center; flex: none; }
+.kb-checks .yes .mk { color: var(--green); }
+.kb-checks .no .mk { color: var(--sev-high); }
+.kb-checks .no { color: var(--text); }
+
+/* Technology rows grouped by category */
+.kb-group-h { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); font-weight: 600; padding: 12px 0 6px; }
+.kb-tech { display: grid; grid-template-columns: minmax(0,220px) minmax(0,1fr) auto; gap: 14px; align-items: baseline; padding: 8px 0; border-top: 1px solid var(--line); }
+.kb-tech .nm { color: var(--text); font-weight: 500; font-size: var(--fs-sm); overflow-wrap: anywhere; }
+.kb-tech .nm .mono { color: var(--text-2); font-weight: 400; margin-left: 6px; }
+.kb-tech .ev { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); overflow-wrap: anywhere; }
+.kb-tech .cf { font-size: var(--fs-xs); }
+
+/* Attack surface: notable hosts first, then a dense column list */
+.kb-host { display: grid; grid-template-columns: minmax(0,260px) minmax(0,1fr); gap: 14px; padding: 8px 0; border-top: 1px solid var(--line); align-items: baseline; }
+.kb-host .h { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text); overflow-wrap: anywhere; }
+.kb-host .why { font-size: var(--fs-sm); color: var(--sev-high); }
+.kb-host .why span { color: var(--text-3); margin-left: 6px; }
+.kb-cols { columns: 3 220px; column-gap: 20px; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); line-height: 1.9; }
+.kb-cols div { break-inside: avoid; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Exposure entries: a finding written as a short paragraph */
+.kb-hit { display: grid; gap: 6px; padding: 14px 0; border-top: 1px solid var(--line); }
+.kb-hit-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.kb-hit-h .id { font-family: var(--mono); font-size: var(--fs-sm); color: var(--text); }
+.kb-hit-h .meta { margin-left: auto; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); }
+.kb-hit .t { font-size: var(--fs-md); color: var(--text); }
+.kb-hit .d { font-size: var(--fs-sm); color: var(--text-2); line-height: 1.6; max-width: 72ch; }
+.kb-hit .fx { font-size: var(--fs-sm); color: var(--green-hi); padding-left: 12px; border-left: 2px solid var(--green); }
+.kb-hit.kev { padding-left: 14px; border-left: 2px solid var(--sev-critical); }
+
+/* Severity counts strip on the Exposure masthead */
+.kb-sevs { display: flex; flex-wrap: wrap; gap: 22px; }
+.kb-sevs div { display: grid; gap: 1px; }
+.kb-sevs .v { font-size: 26px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+.kb-sevs .k { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-3); font-weight: 600; }
+.kb-sevs .critical .v { color: var(--sev-critical); } .kb-sevs .high .v { color: var(--sev-high); }
+.kb-sevs .medium .v { color: var(--sev-medium); } .kb-sevs .low .v { color: var(--sev-low); }
+.kb-sevs .kev .v { color: var(--sev-critical); }
+.kb-sevs .zero .v { color: var(--text-3); }
+
+/* Agent trace: what the model looked at, step by step */
+.kb-trace { display: grid; font-family: var(--mono); font-size: var(--fs-xs); }
+.kb-trace > div { display: grid; grid-template-columns: 28px 92px minmax(0,1fr); gap: 10px; padding: 5px 0; border-top: 1px solid var(--line); }
+.kb-trace .i { color: var(--text-3); }
+.kb-trace .k { color: var(--verify); }
+.kb-trace .k.tool_result { color: var(--text-3); }
+.kb-trace .k.error { color: var(--sev-critical); }
+.kb-trace .c { color: var(--text-2); overflow-wrap: anywhere; white-space: pre-wrap; }
+details.kb-details > summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-2); list-style: none; display: inline-flex; gap: 6px; align-items: center; }
+details.kb-details > summary::before { content: "+"; font-family: var(--mono); color: var(--text-3); width: 10px; }
+details.kb-details[open] > summary::before { content: "-"; }
+details.kb-details > summary::-webkit-details-marker { display: none; }
+details.kb-details[open] > summary { margin-bottom: 8px; }
+.kb-src { font-size: var(--fs-xs); color: var(--text-3); }
+.kb-src a { color: var(--text-3); text-decoration: underline; text-decoration-color: var(--fill-3); }
+.kb-src a:hover { color: var(--accent); }
+
+@media (max-width: 900px) {
+  .kb-glance { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .kb-glance > div:nth-child(n) { padding-left: 14px; border-left: 1px solid var(--line); border-top: 0; }
+  .kb-glance > div:nth-child(odd) { padding-left: 0; border-left: 0; }
+  .kb-glance > div:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .kb-dl { grid-template-columns: 110px minmax(0,1fr); }
+  .kb-tech, .kb-host { grid-template-columns: minmax(0,1fr); gap: 2px; }
+  .kb-checks { grid-template-columns: minmax(0,1fr); }
+}

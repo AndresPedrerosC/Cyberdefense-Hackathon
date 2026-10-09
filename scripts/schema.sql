@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS cyberdefense.events (
   ref_id Nullable(String)
 ) ENGINE = MergeTree ORDER BY (target_id, ts);
 
+-- Knowledge base snapshots for public-domain recon; the latest ts per run is current.
+CREATE TABLE IF NOT EXISTS cyberdefense.knowledge (
+  run_id String,
+  target_id String,
+  ts DateTime64(3, 'UTC'),
+  status LowCardinality(String),
+  doc String
+) ENGINE = MergeTree ORDER BY (target_id, run_id, ts);
+
 -- Runtime user with limited privileges
 CREATE USER IF NOT EXISTS cyberdefense_app IDENTIFIED BY 'hackathon2026';
 GRANT INSERT, SELECT ON cyberdefense.* TO cyberdefense_app;
