@@ -124,6 +124,7 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         emit("intel", "info",
              f"Matched {len(candidates)} candidates from {len(advisories)} advisories", None)
         _record_intel(run_id, stack_items, candidates, advisories, emit)
+        posture = [] if scoped else _record_posture(run_id, emit)
 
         _update_run_state(run, "verifying")
         authorized, reason = is_target_authorized(target.target_id, target.kind)
@@ -148,6 +149,12 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
                 c.match_type,
                 si.status if si else "inferred",
             )
+        if posture:
+            p_items, p_advs, p_cands, p_vers = _posture_rows(posture, target, run_id)
+            store.insert_stack_items(p_items)
+            store.insert_advisories(p_advs)
+            store.insert_verifications(p_vers)
+            candidates += p_cands
         # Persisted after scoring so the report's ORDER BY risk_score reflects verification.
         store.insert_candidates(candidates)
 
@@ -197,6 +204,59 @@ def _record_intel(run_id: str, stack_items: list[StackItem], candidates, advisor
     if not npm:
         emit("intel", "info", "OSV: no versioned JavaScript libraries on the site to check", None)
     save(kb, emit)
+
+
+def _record_posture(run_id: str, emit: Emit) -> list:
+    """Configuration findings from the public-domain KB; mirrored into kb.intel."""
+    from app.intel.posture import posture_findings
+    from app.recon.runner import get_live, save
+
+    kb = get_live(run_id)
+    if not kb:
+        return []
+    hits = posture_findings(kb)
+    kb.intel += hits
+    kb.coverage["posture"] = "ok"
+    save(kb, emit)
+    emit("intel", "info", f"Configuration checks: {len(hits)} findings"
+         + (f" ({', '.join(h.title for h in hits[:4])})" if hits else ""), None)
+    return hits
+
+
+def _posture_rows(hits: list, target: Target, run_id: str) -> tuple[list, list, list, list]:
+    """Store posture hits as stack item, advisory, candidate and an 'observed' verification."""
+    from app.ids import candidate_id, stack_item_id, verification_id
+    from app.schema import Candidate, Evidence, Verification
+
+    items, advs, cands, vers = {}, [], [], []
+    for h in hits:
+        area = h.tech or "domain"
+        sid = stack_item_id(target.target_id, "config", area, None)
+        url = h.url if str(h.url or "").startswith(("http://", "https://")) else None
+        items.setdefault(sid, StackItem(
+            id=sid, run_id=run_id, target_id=target.target_id, ecosystem="config",
+            package=area, name=f"{target.domain} {area}", confidence="high", status="confirmed",
+            source_url=url, evidence=h.evidence,
+        ))
+        adv_id = f"{h.id}@{target.domain}"
+        advs.append(Advisory(
+            advisory_id=adv_id, ecosystem="config", package=area, severity=h.severity,
+            summary=h.title, source="posture", source_url=url,
+        ))
+        cid = candidate_id(sid, adv_id)
+        cands.append(Candidate(
+            id=cid, run_id=run_id, target_id=target.target_id, stack_item_id=sid,
+            advisory_id=adv_id, advisory_url=url, match_type="confirmed", reason=h.detail,
+            severity_hint=h.severity,
+            risk_score=_risk_score(h.severity, "present", "confirmed", "confirmed"),
+        ))
+        vers.append(Verification(
+            id=verification_id(cid, run_id), run_id=run_id, target_id=target.target_id,
+            candidate_id=cid, status="present",
+            evidence=[Evidence(kind="runtime", detail=h.evidence or h.title, source_url=url)],
+            checks_performed=[f"passive:{area}"], suggested_fix=h.fix, target="public-passive",
+        ))
+    return list(items.values()), advs, cands, vers
 
 
 def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:

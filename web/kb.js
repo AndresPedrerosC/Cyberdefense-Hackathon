@@ -534,9 +534,11 @@ function kbIntelRan() {
 function kbHit(h) {
   const sev = kbSev(h.severity);
   const id = h.url ? kbLink(h.url, h.id) : esc(h.id);
-  const meta = [h.tech, h.match === 'confirmed' ? 'version confirmed' : 'version not confirmed', typeof h.epss === 'number' ? `EPSS ${(h.epss * 100).toFixed(1)}%` : ''].filter(Boolean).map(esc).join(' / ');
+  const posture = h.source === 'posture';
+  const matchWord = posture ? 'observed' : h.match === 'confirmed' ? 'version confirmed' : 'version not confirmed';
+  const meta = [h.tech, matchWord, typeof h.epss === 'number' ? `EPSS ${(h.epss * 100).toFixed(1)}%` : ''].filter(Boolean).map(esc).join(' / ');
   return `<div class="kb-hit${h.kev ? ' kev' : ''}"><div class="kb-hit-h"><span class="id">${id}</span><span class="tag tag-sm sev-${sev}">${esc(cap(sev))}</span>${h.kev ? '<span class="tag tag-sm kev">Known exploited</span>' : ''}${h.kev_ransomware ? '<span class="tag tag-sm ransom">Ransomware use</span>' : ''}<span class="meta">${meta}</span></div>
-    <div class="t">${esc(h.title)}</div>${h.detail ? `<div class="d">${esc(h.detail)}</div>` : ''}${h.fixed_version ? `<div class="fx">Fixed in ${esc(h.fixed_version)}</div>` : ''}</div>`;
+    <div class="t">${esc(h.title)}</div>${h.detail ? `<div class="d">${esc(h.detail)}</div>` : ''}${h.evidence ? `<div class="d mono">${esc(h.evidence)}</div>` : ''}${h.fixed_version ? `<div class="fx">Fixed in ${esc(h.fixed_version)}</div>` : ''}${h.fix ? `<div class="fx">${esc(h.fix)}</div>` : ''}</div>`;
 }
 function kbSev(s) { return KB_SEV_RANK[s] != null ? s : 'unknown'; }
 
@@ -610,7 +612,9 @@ function kbExposureHtml() {
 
   const checked = `<section class="kb-sec"><div class="kb-sec-h"><span class="n">05</span><h2>Intel sources</h2></div>
     <p class="kb-prose">${ran ? 'Sources consulted for this report:' : 'Intel sources have not run for this scan:'}</p>${kbIntelCheckedList()}</section>`;
-  return mast + callout + groups + observations + checked;
+  // Once the backend configuration checks have run they cover these observations (and appear on
+  // the Findings board), so the browser-side list only shows for older runs.
+  return mast + callout + groups + (kbCov('posture') ? '' : observations) + checked;
 }
 
 // ---- Shell ----

@@ -389,6 +389,7 @@ function renderBoard(emptyMsg) {
 }
 
 function cardHtml(f) {
+  if (f.ecosystem === 'config') return configCard(f);
   const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
   const isSel = selected === f.candidate_id;
   const reach = f.verification_status === 'verified';
@@ -411,7 +412,45 @@ function openInspector(id) {
   $('insp-backdrop').hidden = false;
 }
 
+// Configuration findings from public recon: observed directly, not matched to an advisory.
+function configCard(f) {
+  return `<button type="button" class="card" data-id="${esc(f.candidate_id)}" aria-pressed="${selected === f.candidate_id}" title="${esc(f.summary)}">
+    <span class="card-top"><span class="card-pkg">${esc(f.package || 'domain')}</span><span class="tag tag-sm o-found">Observed</span></span>
+    <span class="card-sum">${esc(f.summary || f.advisory_id)}</span>
+  </button>`;
+}
+
+function configDetail(f) {
+  const sev = f.severity || 'unknown';
+  const where = f.advisory_url || f.source_url;
+  const observed = (f.evidence || []).map(e => e.detail).filter(Boolean)[0];
+  const steps = [
+    { node: 'repo', title: 'Observed', body: observed ? `<div class="quote">${esc(observed)}</div>` : '<div class="tsm">Seen during passive recon.</div>' },
+    { node: 'advisory', title: 'Why it matters', body: `<div class="tsm">${esc(f.reason || f.summary)}</div>` },
+  ];
+  if (f.suggested_fix) steps.push({ node: 'fixn', title: 'Fix', body: `<div class="fix">${esc(f.suggested_fix)}</div>` });
+  return `
+    <div class="insp-pkg">${esc(f.package || 'domain')}</div>
+    ${f.summary ? `<div class="insp-sum">${esc(f.summary)}</div>` : ''}
+    <div class="insp-tags">
+      <span class="tag sev-${esc(sev)}">${cap(sev)}</span>
+      <span class="tag o-found">Observed</span>
+      <span class="mono">risk ${f.risk_score ?? '--'} · configuration</span>
+    </div>
+    <div class="sources">
+      <div class="sec-label">Sources <span class="mono">1</span></div>
+      <ol class="src-list"><li><span class="dot repo"></span><span class="src-type">Passive recon</span>
+        ${/^https?:\/\//i.test(String(where || ''))
+          ? `<a class="src-val" href="${esc(where)}" target="_blank" rel="noopener" title="${esc(where)}">${esc(where)} <span aria-hidden="true">&#8599;</span></a>`
+          : `<span class="src-val">${esc(where || f.advisory_id)}</span>`}</li></ol>
+    </div>
+    <div class="sec-label">Reasoning</div><div class="chain">${steps.map((st, i) => `
+      <div class="cstep"><div class="crail"><div class="cnode ${st.node}"></div>${i < steps.length - 1 ? '<div class="cline"></div>' : ''}</div>
+        <div class="cbody"><h4>${esc(st.title)}</h4>${st.body}</div></div>`).join('')}</div>`;
+}
+
 function advisoryDetail(f) {
+  if (f.ecosystem === 'config') return configDetail(f);
   const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
   const sev = f.severity || 'unknown';
   return `

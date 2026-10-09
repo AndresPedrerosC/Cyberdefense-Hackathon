@@ -286,11 +286,11 @@ async def test_report_joins_evidence_chain(client, ch):
          None, "in range"),
         ("c2", "s2", "GHSA-2", "", "possible", "low", 1, None, None, ""),
     ])
-    ch.on("FROM stack_items", [("s1", "lodash", "4.17.20", 1, "confirmed", "")])
+    ch.on("FROM stack_items", [("s1", "lodash", "4.17.20", 1, "confirmed", "", "npm")])
     ch.on("FROM verifications", [("c1", "verified",
                                   json.dumps([{"kind": "semgrep", "detail": "hit"}]),
                                   "Upgrade lodash", json.dumps(["semgrep:r.yaml"]))])
-    ch.on("FROM advisories", [("GHSA-1", "Prototype pollution", 1)])
+    ch.on("FROM advisories", [("GHSA-1", "Prototype pollution", 1, "osv")])
     findings = (await client.get(f"/api/runs/{RUN_ID}/report")).json()["findings"]
     f1, f2 = findings
     assert f1["package"] == "lodash" and f1["direct"] is True

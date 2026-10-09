@@ -225,8 +225,8 @@ async def get_report(run_id: RunIdPath):
     adv_ids = list({r[2] for r in cand_rows})
 
     stack = _rows_by_key(
-        "SELECT id, any(package), any(version), any(direct), any(status), any(source_url) "
-        "FROM stack_items WHERE run_id = {run_id:String} AND id IN {ids:Array(String)} GROUP BY id",
+        "SELECT id, any(package), any(version), any(direct), any(status), any(source_url), "
+        "any(ecosystem) FROM stack_items WHERE run_id = {run_id:String} AND id IN {ids:Array(String)} GROUP BY id",
         {"run_id": run_id, "ids": si_ids},
     )
     vers = _rows_by_key(
@@ -235,7 +235,7 @@ async def get_report(run_id: RunIdPath):
         {"run_id": run_id},
     )
     advs = _rows_by_key(
-        "SELECT advisory_id, argMax(summary, modified), max(replayed) "
+        "SELECT advisory_id, argMax(summary, modified), max(replayed), any(source) "
         "FROM advisories WHERE advisory_id IN {ids:Array(String)} GROUP BY advisory_id",
         {"ids": adv_ids},
     )
@@ -266,6 +266,9 @@ async def get_report(run_id: RunIdPath):
             "checks_performed": json.loads(ver[3]) if ver and ver[3] else [],
             "summary": (adv[0] or None) if adv else None,
             "replayed": bool(adv[1]) if adv else False,
+            # "config" marks a configuration finding observed during public recon.
+            "ecosystem": si[5] if si else None,
+            "source": (adv[2] or None) if adv else None,
         })
 
     return {"run_id": run_id, "state": run["state"], "summary": summary, "findings": findings}

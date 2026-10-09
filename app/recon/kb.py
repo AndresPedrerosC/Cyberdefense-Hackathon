@@ -70,6 +70,8 @@ class IntelHit(BaseModel):
     url: str | None = None
     detail: str = ""
     fixed_version: str | None = None
+    fix: str | None = None  # remediation, for posture findings
+    evidence: str | None = None  # what was observed, for posture findings
 
 
 class AgentStep(BaseModel):
