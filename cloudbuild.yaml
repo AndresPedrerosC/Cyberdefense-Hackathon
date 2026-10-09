@@ -39,6 +39,7 @@ steps:
       - --max-instances=2
       - --memory=512Mi
       - --cpu=1
+      - --no-cpu-throttling
       - --timeout=300
       - --set-env-vars=CLICKHOUSE_HOST=${_CH_HOST},CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true,CLICKHOUSE_USER=cyberdefense_app,CLICKHOUSE_DATABASE=cyberdefense,DEMO_MODE=true,LLM_ENABLED=false
       - --set-secrets=CLICKHOUSE_PASSWORD=clickhouse-app-password:latest

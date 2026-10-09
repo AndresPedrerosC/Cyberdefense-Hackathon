@@ -27,7 +27,9 @@ def main():
         secure=secure,
     )
 
-    sql = schema_path.read_text()
+    sql = "\n".join(
+        line for line in schema_path.read_text().splitlines() if not line.lstrip().startswith("--")
+    )
     app_pass = os.environ.get("CLICKHOUSE_APP_PASSWORD")
     if app_pass:
         sql = sql.replace("'hackathon2026'", "'" + app_pass.replace("\\", "\\\\").replace("'", "\\'") + "'")

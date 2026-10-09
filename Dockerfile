@@ -1,3 +1,12 @@
+# Demo target source + lockfile for repo/SCA scans (demo/ is gitignored locally).
+FROM node:20-slim AS demo
+ARG JUICE_SHOP_REF=v15.0.0
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch "${JUICE_SHOP_REF}" https://github.com/juice-shop/juice-shop.git /juice-shop \
+    && cd /juice-shop \
+    && npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,9 +27,7 @@ print('\n'.join(x for x in d['project']['dependencies'] if not x.startswith(('py
     > requirements.txt \
     && pip install -r requirements.txt
 
-# Demo target source for repo/SCA scans (demo/ is gitignored locally).
-ARG JUICE_SHOP_REF=v15.0.0
-RUN git clone --depth 1 --branch "${JUICE_SHOP_REF}" https://github.com/juice-shop/juice-shop.git demo/juice-shop
+COPY --from=demo /juice-shop demo/juice-shop
 
 COPY app/ app/
 COPY web/ web/
