@@ -12,6 +12,8 @@ def main():
     port = int(os.environ.get("CLICKHOUSE_PORT", "8123"))
     admin_user = os.environ.get("CLICKHOUSE_ADMIN_USER", "default")
     admin_pass = os.environ.get("CLICKHOUSE_ADMIN_PASSWORD", "")
+    secure_env = os.environ.get("CLICKHOUSE_SECURE", "").lower()
+    secure = secure_env in ("1", "true", "yes") if secure_env else port == 8443
 
     schema_path = Path(__file__).parent / "schema.sql"
 
@@ -22,9 +24,13 @@ def main():
         port=port,
         username=admin_user,
         password=admin_pass,
+        secure=secure,
     )
 
     sql = schema_path.read_text()
+    app_pass = os.environ.get("CLICKHOUSE_APP_PASSWORD")
+    if app_pass:
+        sql = sql.replace("'hackathon2026'", "'" + app_pass.replace("\\", "\\\\").replace("'", "\\'") + "'")
 
     # Split by semicolon and execute each statement
     statements = [s.strip() for s in sql.split(";") if s.strip()]
@@ -33,6 +39,12 @@ def main():
         if stmt:
             print(f"Executing: {stmt[:60]}...")
             client.command(stmt)
+
+    if app_pass:
+        client.command(
+            "ALTER USER cyberdefense_app IDENTIFIED BY '"
+            + app_pass.replace("\\", "\\\\").replace("'", "\\'") + "'"
+        )
 
     print("Schema applied successfully!")
 

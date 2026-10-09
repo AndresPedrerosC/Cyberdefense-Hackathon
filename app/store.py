@@ -13,6 +13,7 @@ from app.config import (
     CLICKHOUSE_USER,
     CLICKHOUSE_PASSWORD,
     CLICKHOUSE_DATABASE,
+    CLICKHOUSE_SECURE,
 )
 from app.schema import (
     Target, Run, StackItem, Advisory, Candidate, Verification, Event
@@ -31,6 +32,7 @@ def get_client() -> Client:
             username=CLICKHOUSE_USER,
             password=CLICKHOUSE_PASSWORD or "",
             database=CLICKHOUSE_DATABASE,
+            secure=CLICKHOUSE_SECURE,
             # Shared across pipeline threads; ClickHouse rejects concurrent queries per session.
             autogenerate_session_id=False,
         )
