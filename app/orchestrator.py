@@ -70,6 +70,7 @@ def _new_run(target: Target, trigger: RunTrigger) -> Run:
 async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] | None = None) -> str:
     """Execute one full pipeline run for a pre-allocated Run. Returns run_id."""
     from app.discovery import discover
+
     # Not `from app.intel import match`: once app.intel.match is imported, that name is the module.
     from app.intel.match import match_stack_items as match
     from app.verify import verify
@@ -91,7 +92,10 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         else:
             stack_items = await asyncio.to_thread(discover, target, run_id, emit)
 
-        if not stack_items:
+        if not stack_items and target.kind == "public":
+            emit("discovery", "info", "No versioned JavaScript libraries found; the services "
+                 "this domain runs on are listed in the Knowledgebase", None)
+        elif not stack_items:
             emit("discovery", "warn", "No stack items discovered", None)
 
         run.inventory_hash = _inventory_hash(stack_items)
@@ -118,6 +122,7 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         store.insert_advisories(advisories)
         emit("intel", "info",
              f"Matched {len(candidates)} candidates from {len(advisories)} advisories", None)
+        _record_intel(run_id, stack_items, candidates, advisories, emit)
 
         _update_run_state(run, "verifying")
         authorized, reason = is_target_authorized(target.target_id, target.kind)
@@ -162,6 +167,32 @@ async def run_pipeline(run: Run, target: Target, scoped_advisory_ids: list[str] 
         raise
 
     return run_id
+
+
+def _record_intel(run_id: str, stack_items: list[StackItem], candidates, advisories,
+                  emit: Emit) -> None:
+    """Mirror OSV results into the public-domain KB, including when nothing was checkable."""
+    from app.recon.kb import IntelHit
+    from app.recon.runner import get_live, save
+
+    kb = get_live(run_id)
+    if not kb:
+        return
+    kb.status = "cross-referencing"
+    npm = [s for s in stack_items if s.ecosystem == "npm" and s.package]
+    kb.coverage["osv"] = "ok" if npm else "skipped"
+    adv = {a.advisory_id: a for a in advisories}
+    items = {s.id: s for s in stack_items}
+    for c in candidates:
+        a, si = adv.get(c.advisory_id), items.get(c.stack_item_id)
+        kb.intel.append(IntelHit(
+            source="osv", id=c.advisory_id, title=(a.summary if a else None) or c.advisory_id,
+            tech=si.name if si else None, severity=c.severity_hint, match=c.match_type,
+            url=c.advisory_url, detail=c.reason or "", fixed_version=c.fixed_version,
+        ))
+    if not npm:
+        emit("intel", "info", "OSV: no versioned JavaScript libraries on the site to check", None)
+    save(kb, emit)
 
 
 def _finish_knowledge(run_id: str, status: str, emit: Emit) -> None:

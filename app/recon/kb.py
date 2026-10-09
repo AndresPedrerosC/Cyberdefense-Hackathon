@@ -74,7 +74,8 @@ class IntelHit(BaseModel):
 
 class AgentStep(BaseModel):
     step: int
-    kind: Literal["thought", "tool_call", "tool_result", "final", "error"]
+    kind: Literal["thought", "plan", "read", "extract", "tool_call", "tool_result",
+                  "final", "error"]
     name: str | None = None  # tool name for tool_call / tool_result
     content: str
     ts: datetime = Field(default_factory=datetime.utcnow)

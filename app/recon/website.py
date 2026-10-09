@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlsplit
 from app.discovery.net import fetch_page
 from app.recon.domain import in_scope
 from app.recon.kb import FetchedPage, KnowledgeBase
+from app.recon.spa import is_shell, read_spa
 from app.schema import Emit
 
 HTML_CAP = 400 * 1024
@@ -31,7 +32,7 @@ ORG_TYPES = {
     "airline", "sportsorganization", "newsmediaorganization", "researchorganization",
 }
 SOCIAL_PATTERNS = [
-    ("linkedin", re.compile(r"^https?://([a-z]{2,3}\.)?linkedin\.com/(company|school|showcase)/[^/?#]+", re.IGNORECASE)),
+    ("linkedin", re.compile(r"^https?://([a-z]{2,3}\.)?linkedin\.com/(company|school|showcase|in)/[^/?#]+", re.IGNORECASE)),
     ("x", re.compile(r"^https?://(www\.)?(twitter|x)\.com/(?!intent|share|home|search|hashtag)[A-Za-z0-9_]{1,15}/?$", re.IGNORECASE)),
     ("github", re.compile(r"^https?://(www\.)?github\.com/[A-Za-z0-9-]+/?$", re.IGNORECASE)),
     ("facebook", re.compile(r"^https?://(www\.)?facebook\.com/(?!sharer|share|dialog|plugins|tr)[^/?#]+/?$", re.IGNORECASE)),
@@ -431,6 +432,8 @@ def collect_website(kb: KnowledgeBase, emit: Emit) -> list[FetchedPage]:
         kb.web["pages"] = [{"url": p.final_url, "status": p.status} for p in pages]
 
         _extract_company(kb, pages, home, parsed)
+        if in_scope(home.host, domain) and is_shell(page_text(home.html), parsed.scripts):
+            _merge_spa(kb, home, parsed, emit)
         _web_facts(kb, home)
 
         kb.coverage["website"] = "ok" if home.status == 200 else "partial"
@@ -519,6 +522,29 @@ def _extract_company(kb: KnowledgeBase, pages: list[FetchedPage], home: FetchedP
         kb.add_fact("company", f"Social: {net}", url, src, "high")
     for e in emails[:5]:
         kb.add_fact("company", "Email", e, src, "high")
+
+
+def _merge_spa(kb: KnowledgeBase, home: FetchedPage, parsed: _PageParser, emit: Emit) -> None:
+    """App-shell homepage: mine the bundle and fold its links and contacts into the company."""
+    if not read_spa(kb, home, parsed.scripts, emit):
+        return
+    spa = kb.web["spa"]
+    socials = kb.company.setdefault("socials", {})
+    for k, v in extract_socials(spa["links"]).items():
+        socials.setdefault(k, v)
+    emails = kb.company.setdefault("emails", [])
+    for e in spa["emails"]:
+        if in_scope(e.rsplit("@", 1)[-1].lower(), kb.domain) and e not in emails:
+            emails.append(e)
+    for u in spa["links"]:
+        host = urlsplit(u).hostname or ""
+        if host and not in_scope(host, kb.domain) and not any(
+                host.endswith(s) for s in ("gsap.com", "greensock.com")):
+            kb.add_fact("web", "Links to", u, home.final_url, "medium")
+    if not kb.company.get("description") and spa["copy"]:
+        first = next((c for c in spa["copy"] if len(c) > 60), None)
+        if first:
+            kb.company["description"] = first[:400]
 
 
 def _web_facts(kb: KnowledgeBase, home: FetchedPage) -> None:

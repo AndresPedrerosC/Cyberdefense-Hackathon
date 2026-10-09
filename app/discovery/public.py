@@ -34,6 +34,11 @@ def discover_public(target: Target, run_id: str, emit: Emit) -> list[StackItem]:
     emit("discovery", "info", f"Public recon for {domain}", None)
     kb = KnowledgeBase(domain=domain, run_id=run_id, target_id=target.target_id)
     pages = build_knowledge(kb, emit)
+    from app.recon.stack import derive_stack
+    derive_stack(kb)
+    kb.coverage["stack"] = "ok"
+    emit("discovery", "info", f"Stack: {len(kb.stack)} services identified"
+         + (f" ({', '.join(t.name for t in kb.stack[:8])})" if kb.stack else ""), None)
 
     items = []
     seen_packages = set()

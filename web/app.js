@@ -6,6 +6,7 @@ let targetId = null;
 let runId = null;
 let runActive = false;
 let runStartedAt = null;
+let scanKind = 'repo';
 let lastRun = null;
 let report = null;
 let filter = 'all';
@@ -23,6 +24,15 @@ const STAGES = [
   { key: 'verifying', label: 'Verify', desc: 'Run Semgrep rules to check if the vulnerable code is called.' },
   { key: 'reporting', label: 'Report', desc: 'Rank by severity and verification strength.' },
 ];
+
+// Public-domain scans reuse the same run states with recon wording.
+const PUBLIC_STAGES = [
+  { key: 'discovering', label: 'Recon', desc: 'Collect DNS, mail, registration, TLS, subdomains and the website.' },
+  { key: 'matching', label: 'Research', desc: 'The agent reads the site and records sourced facts.' },
+  { key: 'verifying', label: 'Threat intel', desc: 'Cross-reference the stack with advisories.' },
+  { key: 'reporting', label: 'Report', desc: 'Rank by severity and verification strength.' },
+];
+const stages = () => (scanKind === 'public' ? PUBLIC_STAGES : STAGES);
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'unknown'];
 
@@ -81,6 +91,7 @@ $('scan-form').addEventListener('submit', async e => {
 
     const r = await post('/api/runs', { target_id: targetId, trigger: 'manual' });
     runId = r.run_id;
+    kbStart(runId);
     runActive = true;
     runStartedAt = Date.now();
     $('panel-run').textContent = runId;
@@ -94,6 +105,8 @@ $('scan-form').addEventListener('submit', async e => {
 });
 
 function resetRun() {
+  scanKind = kind;
+  kbReset(kind);
   runId = null;
   lastRun = null;
   report = null;
@@ -158,11 +171,11 @@ function renderRunMeta() {
 
 function renderPipeline(run) {
   const failedAt = run.state === 'failed' && run.error ? run.error.split(':')[0] : null;
-  const idx = STAGES.findIndex(s => s.key === (failedAt || run.state));
+  const idx = stages().findIndex(s => s.key === (failedAt || run.state));
   const counts = stageCounts();
   $('strip-sub').hidden = run.state !== 'idle';
 
-  const n = STAGES.length;
+  const n = stages().length;
   const stepPct = 100 / n;
   // Progress runs through the center of each stage's slice, so the fill lines up
   // with the stage currently in progress rather than stopping short or overshooting.
@@ -179,7 +192,7 @@ function renderPipeline(run) {
   fillEl.style.backgroundSize = fillPct > 0 ? `${10000 / fillPct}% 100%` : '100% 100%';
   fillEl.classList.toggle('error', run.state === 'failed');
 
-  $('pipeline-steps').innerHTML = STAGES.map((s, i) => {
+  $('pipeline-steps').innerHTML = stages().map((s, i) => {
     let st = 'pending';
     if (run.state === 'complete' || (idx >= 0 && i < idx)) st = 'done';
     else if (i === idx) st = run.state === 'failed' ? 'error' : 'active';
@@ -191,7 +204,21 @@ function renderPipeline(run) {
 }
 
 // Per-stage results, available once the report is loaded.
+function publicStageCounts() {
+  if (!kb) return {};
+  const facts = kb.facts || [];
+  const agentFacts = facts.filter(f => f.by === 'agent').length;
+  const intel = (kb.intel || []).length;
+  return {
+    discovering: { text: `${fmtNum(facts.length - agentFacts)} facts` },
+    matching: { text: `${fmtNum(agentFacts)} agent facts` },
+    verifying: { text: `${fmtNum(intel)} exposures`, hot: intel > 0 },
+    reporting: { text: `${fmtNum(intel)} ranked` },
+  };
+}
+
 function stageCounts() {
+  if (scanKind === 'public') return publicStageCounts();
   if (!report) return {};
   const f = report.findings || [];
   const s = report.summary || {};
@@ -210,7 +237,19 @@ function stageCounts() {
 
 // ---- Verdict ----
 
+function renderPublicKpis() {
+  const c = (k, n, d, cls) => `<div class="kpi" title="${esc(d)}"><span class="k">${k}</span><span class="v ${cls || (kb ? '' : 'muted')}">${kb ? fmtNum(n) : '--'}</span></div>`;
+  const intel = kb ? (kb.intel || []).length : 0;
+  $('kpis').innerHTML = [
+    c('Facts collected', kb ? (kb.facts || []).length : 0, 'sourced statements about the domain'),
+    c('Technologies', kb ? (kb.stack || []).length : 0, 'fingerprinted from headers, markup and scripts'),
+    c('Subdomains', kb ? (kb.subdomains || []).length : 0, 'hostnames seen in certificate transparency logs'),
+    c('Exposures', intel, 'matches from threat intelligence', kb && intel ? 'red' : (kb ? 'green' : '')),
+  ].join('');
+}
+
 function renderKpis() {
+  if (scanKind === 'public') { renderPublicKpis(); return; }
   const f = report ? report.findings || [] : null;
   const s = report ? report.summary || {} : {};
   const v = n => (f ? fmtNum(n) : '--');
@@ -260,7 +299,7 @@ function renderBoard(emptyMsg) {
     const reach = items.filter(f => f.verification_status === 'verified').length;
     const body = items.length
       ? items.map(cardHtml).join('')
-      : `<div class="col-empty">${esc(emptyMsg || (report ? 'None' : 'No scan yet'))}</div>`;
+      : `<div class="col-empty">${esc(emptyMsg || (report ? (scanKind === 'public' ? 'No vulnerable components found. Open Knowledgebase to see what was checked.' : 'None') : 'No scan yet'))}</div>`;
     return `<div class="col sev-${sev}">
       <div class="col-h"><span class="col-name">${cap(sev)}</span><span class="col-count">${reach ? `<b>${reach} reachable</b> · ` : ''}${items.length}</span></div>
       <div class="col-body">${body}</div>
@@ -433,6 +472,7 @@ async function finishRun(run) {
   runActive = false;
   if (elapsedTimer) clearInterval(elapsedTimer);
   setBusy(false);
+  kbFinish();
   if (run.state === 'failed') {
     showRunError(run.error || 'The scan failed.');
     renderBoard('Scan failed');
@@ -491,6 +531,7 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
   document.querySelectorAll('.nav-item').forEach(i => i.removeAttribute('aria-current'));
   item.setAttribute('aria-current', 'page');
   const view = item.dataset.view;
+  if (view === 'target' || view === 'exposure') return; // kb.js opens the reading view
   if (view === 'findings') { $('board').scrollIntoView({ block: 'nearest' }); return; }
   const shell = $('shell');
   shell.classList.remove('panel-collapsed');
