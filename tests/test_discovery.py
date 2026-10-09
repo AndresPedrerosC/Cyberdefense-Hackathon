@@ -12,6 +12,7 @@ from app.discovery import net, public
 from app.discovery import repo as repo_mod
 from app.discovery.aliases import resolve_alias
 from app.discovery.repo import _extract_package_name, discover_repo
+from app.recon.kb import FetchedPage
 from app.schema import Target
 
 RUN = "run1"
@@ -194,20 +195,28 @@ def test_discover_routes_by_kind(emit):
     assert dp.call_count == 1
 
 
-def test_public_discovery_only_fetches_https_pages_of_its_domain(emit):
+def _fetched_page(html, headers=None, url="https://example.com/"):
+    return FetchedPage(url=url, final_url=url, host="example.com", status=200,
+                       headers=headers or {}, html=html)
+
+
+def _patch_recon(pages):
+    """Public discovery now fetches via app.recon.runner.build_knowledge; patch that seam
+    (and the persistence/agent side effects) so the test exercises only fingerprinting."""
+    return (
+        patch("app.recon.runner.build_knowledge", return_value=pages),
+        patch("app.recon.runner.save"),
+        patch("app.agent.research.research"),
+    )
+
+
+def test_public_discovery_fingerprints_frameworks_from_pages(emit):
     html = '<div data-reactroot></div><script id="__NEXT_DATA__"></script>' \
            '<app ng-version="12.1.0"></app><p data-v-1a2b3c></p>' \
            '<script src="/js/jquery-3.4.1.min.js"></script>'
-    seen = []
-
-    def fake_fetch(url, tid, _emit):
-        seen.append(url)
-        return (html, {"x-powered-by": "Express"}) if url.endswith(".com/") else (None, {})
-
-    with patch.object(public, "safe_fetch", side_effect=fake_fetch):
+    build, save, research = _patch_recon([_fetched_page(html, {"x-powered-by": "Express"})])
+    with build, save, research:
         items = public.discover_public(mk_target("public", domain="example.com"), RUN, emit)
-    assert seen == ["https://example.com/", "https://example.com/about",
-                    "https://example.com/careers"]
     found = {(i.package, i.version) for i in items}
     assert found == {("express", None), ("next", None), ("react", None),
                      ("@angular/core", "12.1.0"), ("vue", None), ("jquery", "3.4.1")}
@@ -215,8 +224,10 @@ def test_public_discovery_only_fetches_https_pages_of_its_domain(emit):
 
 
 def test_public_discovery_dedupes_across_pages(emit):
-    with patch.object(public, "safe_fetch",
-                      return_value=('<div data-reactroot></div>', {})):
+    pages = [_fetched_page('<div data-reactroot></div>', url="https://example.com/"),
+             _fetched_page('<div data-reactroot></div>', url="https://example.com/about")]
+    build, save, research = _patch_recon(pages)
+    with build, save, research:
         items = public.discover_public(mk_target("public", domain="example.com"), RUN, emit)
     assert [i.package for i in items] == ["react"]
 

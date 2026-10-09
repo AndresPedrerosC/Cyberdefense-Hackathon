@@ -269,8 +269,14 @@ async def test_read_endpoints_reject_malformed_ids(client, path):
 
 async def test_report_without_candidates(client, ch):
     main.store.get_run.return_value = {"run_id": RUN_ID, "state": "complete"}
+    ch.on("countIf(d)", [(0, 0)])  # component-count aggregate always returns one row
     r = await client.get(f"/api/runs/{RUN_ID}/report")
-    assert r.json() == {"run_id": RUN_ID, "state": "complete", "findings": []}
+    assert r.json() == {
+        "run_id": RUN_ID,
+        "state": "complete",
+        "summary": {"components": 0, "direct_components": 0, "verification_authorized": None},
+        "findings": [],
+    }
 
 
 async def test_report_joins_evidence_chain(client, ch):
