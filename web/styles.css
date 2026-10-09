@@ -200,12 +200,12 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
   --panel-h: 260px;
   height: 100vh;
   display: grid;
-  grid-template-columns: var(--nav-w) minmax(0,1fr) auto;
+  grid-template-columns: var(--nav-w) minmax(0,1fr);
   grid-template-rows: 48px minmax(0,1fr) var(--panel-h);
   grid-template-areas:
-    "nav toolbar toolbar"
-    "nav canvas inspector"
-    "nav panel panel";
+    "nav toolbar"
+    "nav canvas"
+    "nav panel";
 }
 .shell.panel-collapsed { --panel-h: 34px; }
 
@@ -247,28 +247,22 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .strip-sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 2px; }
 .strip-meta { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
 
-/* Pipeline: four steps in a row, the method made visible */
-.pipeline { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
-.pstep { padding: 10px 12px; background: var(--fill-1); border-top: 2px solid var(--fill-3); display: grid; gap: 4px; align-content: start;
-  transition: border-color var(--dur-base) var(--ease-standard); }
-.pstep-top { display: flex; align-items: center; gap: 8px; }
-.pnum { font-family: var(--mono); font-size: 11px; color: var(--text-3); }
-.pmark { display: inline-flex; width: 14px; height: 14px; align-items: center; justify-content: center; }
-.pmark .dot { background: var(--fill-3); }
+/* Pipeline: one continuous progress bar, stage markers and labels below it */
+.pipeline { display: grid; gap: 14px; }
+.pipeline-track { position: relative; height: 10px; border-radius: 0; background: var(--fill-1); overflow: visible; }
+.pipeline-fill { position: absolute; top: 0; left: 0; height: 100%; width: 0%; border-radius: 0;
+  background-image: linear-gradient(to right, var(--sev-high), var(--green)); background-repeat: no-repeat; background-position: left top;
+  transition: width 500ms var(--ease-standard); }
+.pipeline-fill.error { background-image: none; background-color: var(--sev-critical); }
+
+.pipeline-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; text-align: center; }
+.pstep { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
 .plabel { font-weight: 600; font-size: var(--fs-sm); color: var(--text-2); }
-.pcount { margin-left: auto; font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-2); white-space: nowrap; }
-.pdesc { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.4; }
-.pstep.active { border-top-color: var(--verify); }
+.pcount { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .pstep.active .plabel { color: var(--text); }
-.pstep.active .pmark { color: var(--verify); }
-.pstep.done { border-top-color: var(--green); }
 .pstep.done .plabel { color: var(--text); }
-.pstep.done .pmark .dot { background: var(--green); }
-.pstep.error { border-top-color: var(--sev-critical); }
-.pstep.error .pmark .dot { background: var(--sev-critical); }
 .pstep.error .plabel { color: var(--sev-critical); }
 .pcount.hot { color: var(--sev-critical); }
-.pipeline.compact .pdesc { display: none; }
 .run-error { margin-top: 10px; padding: 8px 12px; background: var(--red-wash); color: var(--sev-critical); font-size: var(--fs-xs); font-family: var(--mono); overflow-wrap: anywhere; }
 
 .kpis { padding: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -301,8 +295,10 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .card-pkg { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-sum { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* ---- Inspector ---- */
-.inspector { grid-area: inspector; width: var(--insp-w); background: var(--fill-1); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; animation: reveal var(--dur-moderate) var(--ease-enter) both; }
+/* ---- Inspector: an overlay, never part of the grid flow ---- */
+.insp-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.28); z-index: 9; animation: reveal var(--dur-base) var(--ease-enter) both; }
+.inspector { position: fixed; top: 0; right: 0; bottom: 0; z-index: 10; width: var(--insp-w); max-width: 100vw; background: var(--fill-1); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; box-shadow: -8px 0 24px rgba(0,0,0,.2); animation: slide-in var(--dur-moderate) var(--ease-enter) both; }
+@keyframes slide-in { from { transform: translateX(100%); } to { transform: translateX(0); } }
 .insp-h { height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); flex: none; }
 .insp-title { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); font-weight: 600; }
 .insp-body { flex: 1; min-height: 0; overflow-y: auto; padding: 16px; }
@@ -357,10 +353,7 @@ a.src-val { color: var(--accent); }
 .chg { padding: 0 16px; color: var(--text-2); }
 .chg::before { content: "+ "; color: var(--green); }
 
-/* ---- Responsive: the inspector overlays, then the nav hides ---- */
-@media (max-width: 1280px) {
-  .inspector { position: fixed; top: 48px; right: 0; bottom: 0; z-index: 5; max-width: 100vw; }
-}
+/* ---- Responsive: the nav hides ---- */
 @media (max-width: 900px) {
   .shell { grid-template-columns: minmax(0,1fr); grid-template-areas: "toolbar" "canvas" "panel"; }
   .nav { display: none; }
@@ -368,7 +361,7 @@ a.src-val { color: var(--accent); }
   .shell { grid-template-rows: auto minmax(0,1fr) var(--panel-h); }
   .scanbar { flex-wrap: wrap; }
   .scanbar .input { width: 100%; flex: 1 1 200px; }
-  .pipeline, .kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .pipeline-steps, .kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .kpis { row-gap: 12px; } .kpi:nth-child(3) { border-left: 0; padding-left: 0; }
 }
 

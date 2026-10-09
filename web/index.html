@@ -81,7 +81,12 @@
           </div>
           <span class="mono strip-meta" id="run-meta">No scan yet</span>
         </div>
-        <ol class="pipeline" id="pipeline"></ol>
+        <div class="pipeline" id="pipeline">
+          <div class="pipeline-track">
+            <div class="pipeline-fill" id="pipeline-fill"></div>
+          </div>
+          <ol class="pipeline-steps" id="pipeline-steps"></ol>
+        </div>
         <div id="run-error" class="run-error" hidden></div>
       </section>
 
@@ -96,7 +101,8 @@
       </section>
     </main>
 
-    <!-- Inspector: evidence for the selected finding -->
+    <!-- Inspector: evidence for the selected finding, an overlay above the canvas -->
+    <div class="insp-backdrop" id="insp-backdrop" hidden></div>
     <aside class="inspector" id="inspector" aria-label="Finding detail" hidden>
       <div class="insp-h">
         <span class="insp-title">Evidence</span>

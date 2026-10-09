@@ -160,19 +160,32 @@ function renderPipeline(run) {
   const failedAt = run.state === 'failed' && run.error ? run.error.split(':')[0] : null;
   const idx = STAGES.findIndex(s => s.key === (failedAt || run.state));
   const counts = stageCounts();
-  const settled = run.state === 'complete' || run.state === 'failed';
-  $('pipeline').classList.toggle('compact', settled);
   $('strip-sub').hidden = run.state !== 'idle';
 
-  $('pipeline').innerHTML = STAGES.map((s, i) => {
+  const n = STAGES.length;
+  const stepPct = 100 / n;
+  // Progress runs through the center of each stage's slice, so the fill lines up
+  // with the stage currently in progress rather than stopping short or overshooting.
+  let fillPct;
+  if (run.state === 'idle') fillPct = 0;
+  else if (run.state === 'complete') fillPct = 100;
+  else if (idx < 0) fillPct = 0;
+  else fillPct = (idx + 0.5) * stepPct;
+  const fillEl = $('pipeline-fill');
+  fillEl.style.width = `${fillPct}%`;
+  // background-size is relative to the fill's own box, so scale it inversely with
+  // fillPct to keep the yellow-to-green gradient anchored to the full track width;
+  // this way the fill always shows the color that matches how far along it is.
+  fillEl.style.backgroundSize = fillPct > 0 ? `${10000 / fillPct}% 100%` : '100% 100%';
+  fillEl.classList.toggle('error', run.state === 'failed');
+
+  $('pipeline-steps').innerHTML = STAGES.map((s, i) => {
     let st = 'pending';
     if (run.state === 'complete' || (idx >= 0 && i < idx)) st = 'done';
     else if (i === idx) st = run.state === 'failed' ? 'error' : 'active';
-    const mark = st === 'active' ? '<span class="spinner"></span>' : '<span class="dot"></span>';
     const c = counts[s.key] || { text: st === 'active' ? 'working' : '' };
-    return `<li class="pstep ${st}">
-      <div class="pstep-top"><span class="pnum">0${i + 1}</span><span class="pmark">${mark}</span><span class="plabel">${s.label}</span><span class="pcount${c.hot ? ' hot' : ''}">${esc(c.text)}</span></div>
-      <div class="pdesc">${s.desc}</div>
+    return `<li class="pstep ${st}" title="${esc(c.text)}">
+      <span class="plabel">${s.label}</span><span class="pcount${c.hot ? ' hot' : ''}">${esc(c.text)}</span>
     </li>`;
   }).join('');
 }
@@ -289,15 +302,18 @@ function openInspector(id) {
     ${sourcesList(f)}
     ${reasoning(f)}`;
   $('inspector').hidden = false;
+  $('insp-backdrop').hidden = false;
 }
 
 function closeInspector() {
   selected = null;
   $('inspector').hidden = true;
+  $('insp-backdrop').hidden = true;
   document.querySelectorAll('.card[aria-pressed="true"]').forEach(c => c.setAttribute('aria-pressed', 'false'));
 }
 
 $('insp-close').addEventListener('click', closeInspector);
+$('insp-backdrop').addEventListener('click', closeInspector);
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('inspector').hidden) closeInspector(); });
 
 // Every input the verdict rests on, in the order it was used. Paths are local, links are external.
@@ -434,10 +450,6 @@ async function finishRun(run) {
   renderBoard();
   loadChanges();
   pollStats();
-
-  // Put the strongest finding in front: the top reachable card opens in the inspector.
-  const top = (report.findings || []).filter(f => f.verification_status === 'verified').sort(cardOrder)[0];
-  if (top && window.innerWidth > 1280) openInspector(top.candidate_id);
 }
 
 async function loadChanges() {
@@ -480,13 +492,26 @@ document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('cl
   item.setAttribute('aria-current', 'page');
   const view = item.dataset.view;
   if (view === 'findings') { $('board').scrollIntoView({ block: 'nearest' }); return; }
-  $('shell').classList.remove('panel-collapsed');
+  const shell = $('shell');
+  shell.classList.remove('panel-collapsed');
+  if (shell.dataset.panelHPrev) {
+    shell.style.setProperty('--panel-h', shell.dataset.panelHPrev);
+    delete shell.dataset.panelHPrev;
+  }
   showTab(view);
 }));
 
 $('panel-toggle').addEventListener('click', () => {
-  const collapsed = $('shell').classList.toggle('panel-collapsed');
+  const shell = $('shell');
+  const collapsed = shell.classList.toggle('panel-collapsed');
   $('panel-toggle').setAttribute('aria-label', collapsed ? 'Expand panel' : 'Collapse panel');
+  if (collapsed) {
+    shell.dataset.panelHPrev = shell.style.getPropertyValue('--panel-h');
+    shell.style.removeProperty('--panel-h');
+  } else if (shell.dataset.panelHPrev) {
+    shell.style.setProperty('--panel-h', shell.dataset.panelHPrev);
+    delete shell.dataset.panelHPrev;
+  }
 });
 
 // Drag the top edge of the panel to resize it; the height is remembered per browser.
