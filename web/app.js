@@ -8,6 +8,8 @@ let runActive = false;
 let runStartedAt = null;
 let lastRun = null;
 let report = null;
+let deep = { vulnscan: [], threats: [], endpoints: [] };
+let view = 'advisories';
 let filter = 'all';
 let selected = null;
 let lastEventTs = null;
@@ -21,7 +23,7 @@ const STAGES = [
   { key: 'discovering', label: 'Discover', desc: 'List every installed package and version from the lockfile.' },
   { key: 'matching', label: 'Match', desc: 'Compare installed versions with advisory affected ranges.' },
   { key: 'verifying', label: 'Verify', desc: 'Run Semgrep rules to check if the vulnerable code is called.' },
-  { key: 'reporting', label: 'Report', desc: 'Rank by severity and verification strength.' },
+  { key: 'reporting', label: 'Report', desc: 'Rank findings, then hunt secrets, misconfig, endpoints and attack chains.' },
 ];
 
 const SEVERITIES = ['critical', 'high', 'medium', 'low', 'unknown'];
@@ -100,7 +102,10 @@ function resetRun() {
   filter = 'all';
   lastEventTs = null;
   eventCount = 0;
+  deep = { vulnscan: [], threats: [], endpoints: [] };
   closeInspector();
+  ['exposures', 'threats', 'endpoints'].forEach(k => setCount(k, 0));
+  renderViews();
   $('term').innerHTML = '<div class="term-empty">$ scan starting</div>';
   setCount('events', 0);
   setCount('changes', 0);
@@ -120,7 +125,10 @@ function setBusy(busy) {
 }
 
 function setCount(which, n) {
-  const map = { events: ['nav-events', 'tab-events'], changes: ['nav-changes', 'tab-changes'], findings: ['nav-findings'] };
+  const map = {
+    events: ['nav-events', 'tab-events'], changes: ['nav-changes', 'tab-changes'], findings: ['nav-findings'],
+    exposures: ['nav-exposures'], threats: ['nav-threats'], endpoints: ['nav-endpoints'],
+  };
   map[which].forEach(id => { $(id).textContent = fmtNum(n); });
 }
 
@@ -204,7 +212,10 @@ function stageCounts() {
     discovering: { text: `${fmtNum(s.components)} components` },
     matching: { text: `${fmtNum(f.length)} matches, ${fmtNum(advisories)} advisories` },
     verifying: { text: verifyText, hot: reachable > 0 },
-    reporting: { text: `${fmtNum(f.length)} findings ranked` },
+    reporting: {
+      text: `${fmtNum(f.length)} ranked, ${fmtNum(deep.threats.length)} attack chains`,
+      hot: deep.threats.some(t => t.remediation_priority === 'immediate'),
+    },
   };
 }
 
@@ -222,6 +233,11 @@ function renderKpis() {
     { k: 'Vulnerable versions', v: v(f && f.length), cls: '', d: f ? `${fmtNum(directHits)} in direct dependencies` : 'installed version inside an advisory range' },
     { k: 'Reachable in code', v: v(reachable), cls: f ? (reachable ? 'red' : 'green') : 'muted', d: 'vulnerable call found by Semgrep' },
     { k: 'Critical severity', v: v(critical), cls: f && critical ? 'red' : f ? '' : 'muted', d: 'severity from the advisory' },
+    {
+      k: 'Attack chains', v: v(deep.threats.length),
+      cls: f ? (deep.threats.some(t => t.remediation_priority === 'immediate') ? 'red' : deep.threats.length ? '' : 'green') : 'muted',
+      d: f && deep.threats.length ? `top score ${Math.max(...deep.threats.map(t => t.score))} / 10` : 'findings correlated into MITRE ATT&CK chains',
+    },
   ];
   $('kpis').innerHTML = cells.map(c =>
     `<div class="kpi" title="${esc(c.d)}"><span class="k">${c.k}</span><span class="v ${c.cls}">${c.v}</span></div>`
@@ -231,6 +247,7 @@ function renderKpis() {
 // ---- Findings board ----
 
 function renderFilter() {
+  $('filter').hidden = view !== 'advisories';
   const f = report ? report.findings || [] : [];
   $('filter').innerHTML = FILTERS.map(x =>
     `<button type="button" data-filter="${x.key}" aria-pressed="${x.key === filter}"${x.title ? ` title="${x.title}"` : ''}>${x.label}<span class="count">${fmtNum(f.filter(x.test).length)}</span></button>`
@@ -248,21 +265,80 @@ function cardOrder(a, b) {
   return r || (b.risk_score || 0) - (a.risk_score || 0) || String(a.package).localeCompare(String(b.package));
 }
 
+// Every result type rides the same severity board, cards and evidence inspector.
+const threatSev = t => t.score >= 8 ? 'critical' : t.score >= 5 ? 'high' : t.score >= 3 ? 'medium' : 'low';
+
+const VIEWS = {
+  advisories: {
+    label: 'Advisories', title: 'Findings by severity',
+    items: () => (report ? report.findings || [] : []),
+    key: f => f.candidate_id, sev: f => f.severity, order: cardOrder,
+    hot: f => f.verification_status === 'verified', hotLabel: 'reachable',
+    card: cardHtml, detail: advisoryDetail,
+  },
+  exposures: {
+    label: 'Exposures', title: 'Secrets, misconfig and package risks',
+    items: () => deep.vulnscan,
+    key: x => x.id, sev: x => x.severity, order: (a, b) => String(a.title).localeCompare(String(b.title)),
+    hot: x => x.type === 'secret_exposure', hotLabel: 'secrets',
+    card: exposureCard, detail: exposureDetail,
+  },
+  threats: {
+    label: 'Attack chains', title: 'Correlated attack chains, MITRE ATT&CK mapped',
+    items: () => deep.threats,
+    key: t => t.id, sev: threatSev, order: (a, b) => b.score - a.score,
+    hot: t => t.remediation_priority === 'immediate', hotLabel: 'fix now',
+    card: threatCard, detail: threatDetail,
+  },
+  endpoints: {
+    label: 'Endpoints', title: 'Attack surface by risk',
+    items: () => deep.endpoints,
+    key: e => e.url, sev: e => e.risk_level, order: (a, b) => String(a.path).localeCompare(String(b.path)),
+    hot: e => e.classification === 'public' && (e.kind === 'sensitive' || e.kind === 'admin'), hotLabel: 'exposed',
+    card: endpointCard, detail: endpointDetail,
+    emptyNote: () => (kind === 'repo' ? 'Endpoint discovery runs on public domain targets' : null),
+  },
+};
+
+function renderViews() {
+  $('board-views').innerHTML = Object.entries(VIEWS).map(([k, v]) =>
+    `<button type="button" data-view="${k}" aria-pressed="${k === view}">${v.label}<span class="count">${fmtNum(v.items().length)}</span></button>`
+  ).join('');
+  $('board-views').querySelectorAll('button').forEach(b => b.addEventListener('click', () => setView(b.dataset.view)));
+  $('board-h2').textContent = VIEWS[view].title;
+}
+
+const NAV_FOR_VIEW = { advisories: 'findings', exposures: 'exposures', threats: 'threats', endpoints: 'endpoints' };
+
+function setView(v) {
+  view = v;
+  closeInspector();
+  document.querySelectorAll('.nav-item').forEach(i => {
+    if (i.dataset.view === NAV_FOR_VIEW[v]) i.setAttribute('aria-current', 'page');
+    else i.removeAttribute('aria-current');
+  });
+  renderViews();
+  renderFilter();
+  renderBoard();
+}
+
 function renderBoard(emptyMsg) {
-  const all = report ? report.findings || [] : [];
-  const list = all.filter(FILTERS.find(x => x.key === filter).test);
+  const v = VIEWS[view];
+  const all = v.items();
+  const list = view === 'advisories' ? all.filter(FILTERS.find(x => x.key === filter).test) : all;
+  if (!emptyMsg && report && !all.length && v.emptyNote) emptyMsg = v.emptyNote();
   const bySev = Object.fromEntries(SEVERITIES.map(s => [s, []]));
-  list.forEach(f => (bySev[SEVERITIES.includes(f.severity) ? f.severity : 'unknown']).push(f));
+  list.forEach(x => { const s = v.sev(x); bySev[SEVERITIES.includes(s) ? s : 'unknown'].push(x); });
   const cols = SEVERITIES.filter(s => s !== 'unknown' || bySev.unknown.length);
 
   $('board').innerHTML = cols.map(sev => {
-    const items = bySev[sev].sort(cardOrder);
-    const reach = items.filter(f => f.verification_status === 'verified').length;
+    const items = bySev[sev].sort(v.order);
+    const hot = items.filter(v.hot).length;
     const body = items.length
-      ? items.map(cardHtml).join('')
+      ? items.map(v.card).join('')
       : `<div class="col-empty">${esc(emptyMsg || (report ? 'None' : 'No scan yet'))}</div>`;
     return `<div class="col sev-${sev}">
-      <div class="col-h"><span class="col-name">${cap(sev)}</span><span class="col-count">${reach ? `<b>${reach} reachable</b> · ` : ''}${items.length}</span></div>
+      <div class="col-h"><span class="col-name">${cap(sev)}</span><span class="col-count">${hot ? `<b>${hot} ${v.hotLabel}</b> · ` : ''}${items.length}</span></div>
       <div class="col-body">${body}</div>
     </div>`;
   }).join('');
@@ -285,13 +361,20 @@ function cardHtml(f) {
 // ---- Inspector ----
 
 function openInspector(id) {
-  const f = (report && report.findings || []).find(x => x.candidate_id === id);
-  if (!f) return;
+  const v = VIEWS[view];
+  const x = v.items().find(i => v.key(i) === id);
+  if (!x) return;
   selected = id;
   $('board').querySelectorAll('.card').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.id === id)));
+  $('insp-body').innerHTML = v.detail(x);
+  $('inspector').hidden = false;
+  $('insp-backdrop').hidden = false;
+}
+
+function advisoryDetail(f) {
   const vs = VSTATUS[f.verification_status] || VSTATUS.inconclusive;
   const sev = f.severity || 'unknown';
-  $('insp-body').innerHTML = `
+  return `
     <div class="insp-pkg">${esc(f.package)}@${esc(f.version || '?')}</div>
     ${f.summary ? `<div class="insp-sum">${esc(f.summary)}</div>` : ''}
     <div class="insp-tags">
@@ -301,8 +384,6 @@ function openInspector(id) {
     </div>
     ${sourcesList(f)}
     ${reasoning(f)}`;
-  $('inspector').hidden = false;
-  $('insp-backdrop').hidden = false;
 }
 
 function closeInspector() {
@@ -331,7 +412,10 @@ function sourcesFor(f) {
 }
 
 function sourcesList(f) {
-  const rows = sourcesFor(f);
+  return srcBlock(sourcesFor(f));
+}
+
+function srcBlock(rows) {
   if (!rows.length) return '';
   return `<div class="sources">
     <div class="sec-label">Sources <span class="mono">${rows.length}</span></div>
@@ -367,8 +451,11 @@ function reasoning(f) {
   steps.push({ node: 'verify', title: vs.label, body: verify });
   const fix = f.suggested_fix || (f.fixed_version ? `Upgrade ${f.package} to ${f.fixed_version} or later` : null);
   if (fix) steps.push({ node: 'fixn', title: 'Fix', body: `<div class="fix">${esc(fix)}</div>` });
+  return chainHtml('Reasoning', steps);
+}
 
-  return `<div class="sec-label">Reasoning</div><div class="chain">${steps.map((st, i) => `
+function chainHtml(label, steps) {
+  return `<div class="sec-label">${esc(label)}</div><div class="chain">${steps.map((st, i) => `
     <div class="cstep"><div class="crail"><div class="cnode ${st.node}"></div>${i < steps.length - 1 ? '<div class="cline"></div>' : ''}</div>
       <div class="cbody"><h4>${esc(st.title)}</h4>${st.body}</div></div>`).join('')}</div>`;
 }
@@ -383,6 +470,141 @@ function shortPath(url) {
   if (i >= 0) p = p.slice(i + 1);
   else if (p.startsWith('/')) p = p.split('/').slice(-3).join('/');
   return p + line;
+}
+
+// ---- Deep scan: exposures, attack chains, endpoints ----
+
+const EXPOSURE_TYPE = {
+  secret_exposure: ['Secret', 'Anyone with the repo, or a leaked clone, can use this credential.'],
+  npmrc_auth_token: ['Registry token', 'A committed registry token can publish packages under your name.'],
+  dangerous_install_script: ['Install script', 'Runs automatically on npm install with the installer\'s privileges.'],
+  missing_files_field: ['Publish scope', 'Without a files allowlist, npm publish can ship local files and secrets.'],
+  forced_install_config: ['Install config', 'Disables dependency checks, which hides incompatible or tampered versions.'],
+  typosquatting: ['Typosquat', 'Name sits one or two edits from a popular package, a common malware delivery trick.'],
+  suspicious_package_name: ['Package name', 'Very short names are easy to squat or mistype.'],
+  dependency_confusion: ['Dep confusion', 'A public package with this internal name would win the install.'],
+  dependency_confusion_candidate: ['Dep confusion', 'Internal-looking name could be hijacked by a higher version on the public registry.'],
+  version_gap: ['Version gap', 'Installed version trails the registry by a wide margin.'],
+  maintainer_takeover: ['Maintainer change', 'A recent maintainer change is a known precursor to malicious releases.'],
+};
+
+const exposureType = x => EXPOSURE_TYPE[x.type] || [cap(String(x.type).replace(/_/g, ' ')), ''];
+const fileLoc = x => (x.file ? shortPath(x.file) + (x.line ? ':' + x.line : '') : null);
+
+function exposureCard(x) {
+  const [label] = exposureType(x);
+  const id = VIEWS.exposures.key(x);
+  return `<button type="button" class="card${x.type === 'secret_exposure' ? ' reachable' : ''}" data-id="${esc(id)}" aria-pressed="${selected === id}" title="${esc(x.detail)}">
+    <span class="card-top"><span class="card-pkg">${esc(x.package || fileLoc(x) || x.title)}</span><span class="tag tag-sm o-neutral">${esc(label)}</span></span>
+    <span class="card-sum">${esc(x.title)}</span>
+  </button>`;
+}
+
+function exposureDetail(x) {
+  const [label, why] = exposureType(x);
+  const loc = fileLoc(x);
+  const rows = [];
+  if (loc) rows.push({ node: 'repo', type: 'File', value: loc });
+  if (x.package) rows.push({ node: 'advisory', type: 'Package', value: x.package });
+  rows.push({ node: 'verify', type: 'Check', value: x.type });
+  const steps = [
+    { node: 'repo', title: 'Found', body: `${loc ? `<div class="codeline">${esc(loc)}</div>` : ''}<div class="tsm">${esc(x.detail)}</div>` },
+  ];
+  if (why) steps.push({ node: 'verify', title: 'Why it matters', body: `<div class="tsm">${esc(why)}</div>` });
+  if (x.remediation) steps.push({ node: 'fixn', title: 'Fix', body: `<div class="fix">${esc(x.remediation)}</div>` });
+  return `
+    <div class="insp-pkg">${esc(x.title)}</div>
+    <div class="insp-tags">
+      <span class="tag sev-${esc(x.severity || 'unknown')}">${cap(x.severity || 'unknown')}</span>
+      <span class="tag o-neutral">${esc(label)}</span>
+    </div>
+    ${srcBlock(rows)}
+    ${chainHtml('Reasoning', steps)}`;
+}
+
+// T1195.002 -> https://attack.mitre.org/techniques/T1195/002/
+const mitreUrl = t => `https://attack.mitre.org/techniques/${String(t).replace('.', '/')}/`;
+
+function threatCard(t) {
+  return `<button type="button" class="card${t.remediation_priority === 'immediate' ? ' reachable' : ''}" data-id="${esc(t.id)}" aria-pressed="${selected === t.id}" title="${esc(t.tactic)}">
+    <span class="card-top"><span class="card-pkg">${esc(t.name)}</span><span class="tag tag-sm sev-${threatSev(t)}">${esc(t.score)}</span></span>
+    <span class="card-sum">${esc((t.mitre_techniques || []).join(' · '))} · ${esc((t.components || []).length)} components</span>
+  </button>`;
+}
+
+const CHAIN_NODES = ['repo', 'advisory', 'verify', 'exfil'];
+
+function threatDetail(t) {
+  const narrative = String(t.narrative || '').replace(/^[^:]*:\s*(?=\(1\))/, '');
+  const steps = narrative.split(/\(\d+\)\s*/).map(s => s.trim()).filter(Boolean).map((s, i) => {
+    const m = /^([^:]{1,40}):\s*(.*)$/s.exec(s);
+    return {
+      node: CHAIN_NODES[Math.min(i, CHAIN_NODES.length - 1)],
+      title: m ? cap(m[1]) : `Step ${i + 1}`,
+      body: `<div class="tsm">${esc(m ? m[2] : s)}</div>`,
+    };
+  });
+  const fix = t.remediation_priority === 'immediate'
+    ? 'Fix the components above now. Removing any single link breaks the chain.'
+    : 'Patch the highest-severity component first; any single fix breaks the chain.';
+  steps.push({ node: 'fixn', title: `Priority: ${cap(t.remediation_priority)}`, body: `<div class="fix">${esc(fix)}</div>` });
+
+  const rows = (t.mitre_techniques || []).map(m => ({ node: 'advisory', type: 'ATT&CK', value: m, href: mitreUrl(m) }))
+    .concat((t.components || []).map(c => ({ node: 'repo', type: 'Component', value: c })));
+  return `
+    <div class="insp-pkg">${esc(t.name)}</div>
+    <div class="insp-sum">${esc(t.tactic)}</div>
+    <div class="insp-tags">
+      <span class="tag sev-${threatSev(t)}">Score ${esc(t.score)} / 10</span>
+      <span class="mono">${esc((t.components || []).length)} linked components</span>
+    </div>
+    ${srcBlock(rows)}
+    ${chainHtml('Attack path', steps)}`;
+}
+
+const CLASSIFICATION = {
+  public: 'Answered 200 with no authentication challenge.',
+  authenticated: 'Asked for credentials (WWW-Authenticate).',
+  redirect: 'Redirected elsewhere, likely to a login page.',
+  error: 'Did not answer with content.',
+};
+
+function endpointFix(e) {
+  if (e.classification !== 'public') return null;
+  if (e.kind === 'sensitive') return 'Block this path at the web server and remove the file from the deploy.';
+  if (e.kind === 'admin') return 'Put this route behind authentication and restrict it by network.';
+  if (e.kind === 'api') return 'Require authentication on this API route.';
+  return null;
+}
+
+function endpointCard(e) {
+  const id = VIEWS.endpoints.key(e);
+  const server = (e.tech_signals || {}).server || (e.tech_signals || {})['x-powered-by'];
+  const hot = VIEWS.endpoints.hot(e);
+  return `<button type="button" class="card${hot ? ' reachable' : ''}" data-id="${esc(id)}" aria-pressed="${selected === id}" title="${esc(e.url)}">
+    <span class="card-top"><span class="card-pkg">${esc(e.path || e.url)}</span><span class="tag tag-sm ${hot ? 'o-exposed' : 'o-neutral'}">${esc(e.kind)}</span></span>
+    <span class="card-sum">${esc(e.classification || 'not probed')}${server ? ' · ' + esc(server) : ''} · via ${esc(e.source)}</span>
+  </button>`;
+}
+
+function endpointDetail(e) {
+  const rows = [{ node: 'repo', type: 'Discovered via', value: e.source }]
+    .concat(Object.entries(e.tech_signals || {}).map(([h, v]) => ({ node: 'verify', type: h, value: v })));
+  const steps = [
+    { node: 'repo', title: 'Discovered', body: `<div class="codeline">${esc(e.url)}</div><div class="tsm">Found through ${esc(e.source)}.</div>` },
+    { node: 'verify', title: e.classification ? cap(e.classification) : 'Not probed', body: `<div class="tsm">${esc(CLASSIFICATION[e.classification] || 'Outside the fingerprint budget, so it was not requested.')}</div>` },
+  ];
+  const fix = endpointFix(e);
+  if (fix) steps.push({ node: 'fixn', title: 'Fix', body: `<div class="fix">${esc(fix)}</div>` });
+  return `
+    <div class="insp-pkg">${esc(e.path || e.url)}</div>
+    <div class="insp-tags">
+      <span class="tag sev-${esc(e.risk_level || 'unknown')}">${cap(e.risk_level || 'unknown')}</span>
+      <span class="tag o-neutral">${esc(e.kind)}</span>
+      <span class="mono">${e.auth_required ? 'auth required' : e.classification === 'public' ? 'no auth' : ''}</span>
+    </div>
+    ${srcBlock(rows)}
+    ${chainHtml('Reasoning', steps)}`;
 }
 
 // ---- Polling ----
@@ -444,12 +666,26 @@ async function finishRun(run) {
     showRunError('Scan finished but the report could not be loaded (' + err.message + ').');
     return;
   }
+  // Deep-scan sections are optional; a missing one renders as empty rather than failing the report.
+  const [vulnscan, threats, endpoints] = await Promise.all(
+    [['vulnscan', 'findings'], ['threats', 'threats'], ['endpoints', 'endpoints']].map(([path, field]) =>
+      get(`/api/runs/${runId}/${path}`).then(r => r[field] || []).catch(() => []))
+  );
+  deep = { vulnscan, threats, endpoints };
   setCount('findings', (report.findings || []).length);
+  setCount('exposures', deep.vulnscan.length);
+  setCount('threats', deep.threats.length);
+  setCount('endpoints', deep.endpoints.length);
+  renderViews();
   renderKpis();
   renderFilter();
   renderBoard();
   loadChanges();
   pollStats();
+
+  // Put the strongest finding in front: the top reachable card opens in the inspector.
+  const top = (report.findings || []).filter(f => f.verification_status === 'verified').sort(cardOrder)[0];
+  if (view === 'advisories' && top && window.innerWidth > 1280) openInspector(top.candidate_id);
 }
 
 async function loadChanges() {
@@ -487,18 +723,23 @@ function showTab(tab) {
 
 document.querySelectorAll('.panel-tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
 
+const VIEW_FOR_NAV = Object.fromEntries(Object.entries(NAV_FOR_VIEW).map(([v, n]) => [n, v]));
+
 document.querySelectorAll('.nav-item').forEach(item => item.addEventListener('click', () => {
+  const target = item.dataset.view;
+  if (VIEW_FOR_NAV[target]) {
+    setView(VIEW_FOR_NAV[target]);
+    $('board').scrollIntoView({ block: 'nearest' });
+    return;
+  }
   document.querySelectorAll('.nav-item').forEach(i => i.removeAttribute('aria-current'));
-  item.setAttribute('aria-current', 'page');
-  const view = item.dataset.view;
-  if (view === 'findings') { $('board').scrollIntoView({ block: 'nearest' }); return; }
   const shell = $('shell');
   shell.classList.remove('panel-collapsed');
   if (shell.dataset.panelHPrev) {
     shell.style.setProperty('--panel-h', shell.dataset.panelHPrev);
     delete shell.dataset.panelHPrev;
   }
-  showTab(view);
+  showTab(target);
 }));
 
 $('panel-toggle').addEventListener('click', () => {
@@ -604,6 +845,7 @@ function esc(s) {
 
 // ---- Init ----
 renderPipeline({ state: 'idle' });
+renderViews();
 renderKpis();
 renderFilter();
 renderBoard();

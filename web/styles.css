@@ -139,6 +139,7 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .tag.o-found { background: var(--sev-high); color: #2a1705; }
 .tag.o-clear { background: var(--green); color: var(--green-ink); }
 .tag.o-gray { background: var(--sev-unknown); color: #0e1512; }
+.tag.o-neutral { background: var(--fill-3); color: var(--text-2); font-weight: 500; }
 
 /* Dot labels: metadata and weaker claims */
 .dlabel { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-sm); color: var(--text-2); }
@@ -159,7 +160,7 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .icon-btn svg, .nav-item svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
 /* KPI strip: numbers separated by thin vertical rules */
-.kpis { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); }
+.kpis { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); }
 .kpi { padding: 2px 20px; display: grid; gap: 2px; align-content: start; }
 .kpi + .kpi { border-left: 1px solid var(--line); }
 .kpi:first-child { padding-left: 0; }
@@ -173,7 +174,7 @@ code, .mono { font-family: var(--mono); font-size: .92em; }
 .cstep { display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 14px; }
 .crail { display: grid; justify-items: center; grid-template-rows: auto 1fr; }
 .cnode { width: 11px; height: 11px; border-radius: 50%; margin-top: 5px; }
-.cnode.repo { background: var(--green); } .cnode.advisory { background: var(--accent); } .cnode.verify { background: var(--verify); } .cnode.fixn { background: var(--green-hi); }
+.cnode.repo { background: var(--green); } .cnode.advisory { background: var(--accent); } .cnode.verify { background: var(--verify); } .cnode.fixn { background: var(--green-hi); } .cnode.exfil { background: var(--sev-critical); }
 .cline { width: 2px; background: var(--line); min-height: 14px; }
 .cbody { padding-bottom: 18px; display: grid; gap: 7px; min-width: 0; }
 .cbody h4 { font-size: var(--fs-sm); }
@@ -362,7 +363,7 @@ a.src-val { color: var(--accent); }
   .scanbar { flex-wrap: wrap; }
   .scanbar .input { width: 100%; flex: 1 1 200px; }
   .pipeline-steps, .kpis { grid-template-columns: repeat(2,minmax(0,1fr)); }
-  .kpis { row-gap: 12px; } .kpi:nth-child(3) { border-left: 0; padding-left: 0; }
+  .kpis { row-gap: 12px; } .kpi:nth-child(odd) { border-left: 0; padding-left: 0; }
 }
 
 /* thin, dark-friendly scrollbars */

@@ -272,7 +272,7 @@ async def get_report(run_id: RunIdPath):
 
 
 @app.get("/api/runs/{run_id}/knowledge")
-async def get_knowledge(run_id: str):
+async def get_knowledge(run_id: RunIdPath):
     """Latest knowledge base snapshot for a public-domain run."""
     kb = get_live(run_id)
     if kb:
@@ -281,6 +281,27 @@ async def get_knowledge(run_id: str):
     if not doc:
         raise HTTPException(404, "No knowledge base for this run")
     return Response(doc, media_type="application/json")
+
+
+@app.get("/api/runs/{run_id}/vulnscan")
+async def get_vulnscan(run_id: RunIdPath):
+    """Deep dependency / secret / misconfiguration findings for a run."""
+    from app import scanner
+    return {"run_id": run_id, "findings": scanner.get_scan_results(run_id, "vulnscan") or []}
+
+
+@app.get("/api/runs/{run_id}/endpoints")
+async def get_endpoints(run_id: RunIdPath):
+    """Enumerated attack-surface endpoints for a run."""
+    from app import scanner
+    return {"run_id": run_id, "endpoints": scanner.get_scan_results(run_id, "endpoints") or []}
+
+
+@app.get("/api/runs/{run_id}/threats")
+async def get_threats(run_id: RunIdPath):
+    """Correlated threat patterns for a run."""
+    from app import scanner
+    return {"run_id": run_id, "threats": scanner.get_scan_results(run_id, "threats") or []}
 
 
 @app.get("/api/targets/{target_id}/changes")
